@@ -1,0 +1,6 @@
+{
+  "name": "Lucky Fruit Wheel 77",
+  "description": "Royal arcade 9-slice fruit wheel game featuring Watermelon, Plum, and Lucky 77 multipliers with live betting chips, round history, and winners podium.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
