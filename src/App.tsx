@@ -164,12 +164,12 @@ export default function App() {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       option,
       value,
-      xPct: 24 + Math.random() * 52,
-      yPct: 30 + Math.random() * 38,
+      xPct: 22 + Math.random() * 40,
+      yPct: 36 + Math.random() * 30,
       rotation: Math.round((Math.random() - 0.5) * 34),
       isPlayer,
     };
-    setPlacedChips((prev) => [...prev.slice(-36), chip]);
+    setPlacedChips((prev) => [...prev.slice(-30), chip]);
   }, []);
 
   // Place player bet
@@ -320,7 +320,7 @@ export default function App() {
           targetSlice.option,
           extraBonus,
           playerNameRef.current,
-          '/assets/game/avatar_player.png',
+          '/src/assets/images/hd_player_avatar_1795648953099.jpg',
           playerCost,
           playerWin
         );
@@ -696,7 +696,7 @@ export default function App() {
               className="h-full aspect-square shrink-0 overflow-hidden rounded-[9px] border-2 border-[#e5bd67] transition hover:brightness-110 cursor-pointer"
             >
               <img
-                src="/assets/game/avatar_player.png"
+                src="/src/assets/images/hd_player_avatar_1795648953099.jpg"
                 alt={playerName}
                 referrerPolicy="no-referrer"
                 draggable={false}

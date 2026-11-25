@@ -134,9 +134,9 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
                 </span>
               </div>
 
-              {/* Center: HD Icon + Gold Multiplier */}
-              <div className="relative z-10 flex flex-1 items-center justify-center gap-0.5 min-h-0 px-0.5">
-                <div className="flex h-[84%] max-h-[66px] items-center justify-center shrink-0">
+              {/* Center: HD Icon + Full Unclipped Gold Multiplier */}
+              <div className="relative flex flex-1 w-full items-center justify-center gap-0.5 min-h-0 px-0.5">
+                <div className="relative z-10 flex h-[70%] max-h-[50px] items-center justify-center shrink-0">
                   {option === 'watermelon' && (
                     <SilverHexPlate
                       uid="melon"
@@ -152,21 +152,21 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
                     />
                   )}
                   {option === 'seven' && (
-                    <div className="relative flex h-full items-center justify-center">
+                    <div className="relative flex h-[92%] items-center justify-center">
                       <img
                         src="/assets/game/icon_77_large.png"
                         alt="Lucky 77"
                         referrerPolicy="no-referrer"
                         draggable={false}
-                        className="h-[96%] w-auto object-contain drop-shadow-[0_3px_6px_rgba(55,0,70,0.85)]"
+                        className="h-full w-auto max-w-[66px] object-contain drop-shadow-[0_3px_6px_rgba(55,0,70,0.85)]"
                       />
                     </div>
                   )}
                 </div>
 
                 <span
-                  className="font-display text-gold-3d font-black italic tracking-tight leading-none shrink-0"
-                  style={{ fontSize: 'clamp(20px, 5.2vw, 35px)' }}
+                  className="relative z-30 font-display text-gold-3d font-black italic tracking-tight leading-none shrink-0 pr-1.5 pl-0.5"
+                  style={{ fontSize: 'clamp(16px, 3.6vw, 25px)' }}
                 >
                   x{mult}
                 </span>
@@ -190,7 +190,7 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
                       }}
                       exit={{ opacity: 0, scale: 0.5 }}
                       transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-                      className="absolute w-[22%] max-w-[35px] aspect-square rounded-full drop-shadow-[0_2px_4px_rgba(0,0,0,0.75)]"
+                      className="absolute w-[18%] max-w-[27px] aspect-square rounded-full drop-shadow-[0_2px_4px_rgba(0,0,0,0.75)]"
                       style={{
                         left: `${chip.xPct}%`,
                         top: `${chip.yPct}%`,

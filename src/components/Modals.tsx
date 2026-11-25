@@ -252,7 +252,7 @@ export const GameModals: React.FC<ModalsProps> = ({
                 <div className="mt-1 flex items-center justify-between rounded-xl border border-purple-400/20 bg-[#170542]/90 px-3 py-2">
                   <div className="flex items-center gap-2.5 min-w-0">
                     <img
-                      src="/assets/game/avatar_player.png"
+                      src="/src/assets/images/hd_player_avatar_1795648953099.jpg"
                       alt={playerName}
                       referrerPolicy="no-referrer"
                       className="h-11 w-11 shrink-0 rounded-lg border-2 border-[#e8bc54] object-cover"
