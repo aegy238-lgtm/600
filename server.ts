@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express, { NextFunction, Request, Response } from 'express';
 import { createServer as createViteServer } from 'vite';
-import { dealRoundHands, SeatId } from './src/engine/teenPatti.ts';
+import { dealRoundHands, MAX_BET_SEATS_PER_ROUND, SeatId } from './src/engine/teenPatti.ts';
 import { createDatabase } from './src/server/db.ts';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -334,6 +334,14 @@ async function startServer() {
       B: Math.max(0, Math.floor(Number(rawBets?.B) || 0)),
       C: Math.max(0, Math.floor(Number(rawBets?.C) || 0)),
     };
+
+    const activeBetSeats = (['A', 'B', 'C'] as SeatId[]).filter((s) => bets[s] > 0);
+    if (activeBetSeats.length > MAX_BET_SEATS_PER_ROUND) {
+      res.status(400).json({
+        error: `You can only bet on up to ${MAX_BET_SEATS_PER_ROUND} seats per round.`,
+      });
+      return;
+    }
 
     const playerName = typeof req.body?.playerName === 'string' ? req.body.playerName : undefined;
     const player = db.upsertPlayerHeartbeat(playerId, playerName);

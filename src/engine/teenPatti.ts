@@ -1,4 +1,5 @@
 export type SeatId = 'A' | 'B' | 'C';
+export const MAX_BET_SEATS_PER_ROUND = 2;
 
 export type Suit = 'spades' | 'hearts' | 'diamonds' | 'clubs';
 
@@ -264,31 +265,74 @@ export function evaluateTeenPattiHand(cards: PlayingCard[]): HandEvaluation {
 }
 
 /**
- * Returns normalized win probabilities (summing cleanly to 100%) for A, B, C.
+ * Returns the exact manual win rates (0..100%) per seat without forcing 0% back to 33%.
  */
 export function getNormalizedWinProbs(
   winRates: Record<SeatId, number>
 ): Record<SeatId, number> {
-  const a = Math.max(0, Number.isFinite(winRates.A) ? winRates.A : 0);
-  const b = Math.max(0, Number.isFinite(winRates.B) ? winRates.B : 0);
-  const c = Math.max(0, Number.isFinite(winRates.C) ? winRates.C : 0);
-  const sum = a + b + c;
-  if (sum <= 0) {
-    return { A: 33.33, B: 33.33, C: 33.34 };
-  }
   return {
-    A: (a / sum) * 100,
-    B: (b / sum) * 100,
-    C: (c / sum) * 100,
+    A: Math.min(100, Math.max(0, Number.isFinite(winRates.A) ? winRates.A : 0)),
+    B: Math.min(100, Math.max(0, Number.isFinite(winRates.B) ? winRates.B : 0)),
+    C: Math.min(100, Math.max(0, Number.isFinite(winRates.C) ? winRates.C : 0)),
   };
 }
 
-function pickWeightedSeat(winRates: Record<SeatId, number>): SeatId {
-  const probs = getNormalizedWinProbs(winRates);
-  const roll = Math.random() * 100;
-  if (roll < probs.A) return 'A';
-  if (roll < probs.A + probs.B) return 'B';
-  return 'C';
+function pickFromSeatsWeighted(
+  seats: SeatId[],
+  winRates: Record<SeatId, number>
+): SeatId {
+  const weights = seats.map((s) =>
+    Math.max(0, Number.isFinite(winRates[s]) ? winRates[s] : 0)
+  );
+  const sum = weights.reduce((acc, w) => acc + w, 0);
+  if (sum <= 0) {
+    return seats[Math.floor(Math.random() * seats.length)];
+  }
+  let roll = Math.random() * sum;
+  for (let i = 0; i < seats.length; i++) {
+    roll -= weights[i];
+    if (roll < 0) return seats[i];
+  }
+  return seats[seats.length - 1];
+}
+
+/**
+ * Picks a winning seat using exact manual 0..100% win rates.
+ * - When a player bets on 1 or 2 seats, each bet seat uses its exact configured 0..100% win rate.
+ * - If all seats (or all bet seats) are set to 0%, an unbet seat wins 100% of the time (no win for player).
+ * - When no bets are placed, picks proportionally by weights (or randomly if all 0%).
+ */
+function pickManualWinRateSeat(
+  winRates: Record<SeatId, number>,
+  userBets: Record<SeatId, number>
+): SeatId {
+  const rates = getNormalizedWinProbs(winRates);
+  const betSeats = ALL_SEATS.filter((s) => (userBets[s] || 0) > 0);
+  const unbetSeats = ALL_SEATS.filter((s) => (userBets[s] || 0) <= 0);
+
+  if (betSeats.length > 0 && unbetSeats.length > 0) {
+    const betWinSum = betSeats.reduce((acc, s) => acc + rates[s], 0);
+    if (betWinSum <= 0) {
+      // 0% manual win rate on player's chosen seat(s) -> guaranteed no win!
+      return pickFromSeatsWeighted(unbetSeats, rates);
+    }
+
+    // If sum of player's bet seat win rates <= 100%, use exact percentages directly;
+    // the remaining (100 - betWinSum)% goes to an unbet seat.
+    if (betWinSum < 100) {
+      let roll = Math.random() * 100;
+      for (const s of betSeats) {
+        if (roll < rates[s]) return s;
+        roll -= rates[s];
+      }
+      return pickFromSeatsWeighted(unbetSeats, rates);
+    }
+
+    // If betWinSum >= 100%, player is guaranteed to win on one of their bet seats proportionally
+    return pickFromSeatsWeighted(betSeats, rates);
+  }
+
+  return pickFromSeatsWeighted(ALL_SEATS, rates);
 }
 
 export interface DealOptions {
@@ -300,8 +344,8 @@ export interface DealOptions {
 }
 
 /**
- * Deals 9 authentic unique cards from a 52-card deck and resolves the winning seat
- * according to the Admin Dashboard configuration while guaranteeing genuine Teen Patti hands.
+ * Deals 9 authentic unique cards from a 52-card deck (3 hands of 3 cards) and resolves
+ * the winning seat (A, B, or C) according to the Admin Dashboard configuration.
  */
 export function dealRoundHands(options?: DealOptions): {
   hands: Record<SeatId, HandEvaluation>;
@@ -344,24 +388,23 @@ export function dealRoundHands(options?: DealOptions): {
       .map((l) => l.seat);
     targetWinner = bestSeats[Math.floor(Math.random() * bestSeats.length)];
   } else if (options.outcomeMode === 'highest_bet') {
-    // Player-friendly mode: seat with highest user bet wins (fallback to weighted if no bet)
+    // Player-friendly mode: seat with highest user bet wins (fallback to manual rates if no bet)
     const totalBet = options.userBets.A + options.userBets.B + options.userBets.C;
     if (totalBet > 0) {
       const maxBet = Math.max(options.userBets.A, options.userBets.B, options.userBets.C);
       const topSeats = ALL_SEATS.filter((s) => options.userBets[s] === maxBet);
       targetWinner = topSeats[Math.floor(Math.random() * topSeats.length)];
     } else {
-      targetWinner = pickWeightedSeat(options.winRates);
+      targetWinner = pickManualWinRateSeat(options.winRates, options.userBets);
     }
   } else {
-    // Weighted probability mode
-    targetWinner = pickWeightedSeat(options.winRates);
+    // Manual win rate mode (0%..100% per seat)
+    targetWinner = pickManualWinRateSeat(options.winRates, options.userBets);
   }
 
   // Sort the 3 genuinely dealt hands strongest -> weakest and assign strongest to targetWinner
   const sorted = [...rawHands].sort((a, b) => b.score - a.score);
   const losingSeats = ALL_SEATS.filter((s) => s !== targetWinner);
-  // Randomize which losing seat gets 2nd vs 3rd hand
   const swapLosers = Math.random() < 0.5;
   const hands = {} as Record<SeatId, HandEvaluation>;
   hands[targetWinner] = sorted[0];

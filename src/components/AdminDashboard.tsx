@@ -144,17 +144,19 @@ const DICT = {
     modeLowestDesc: 'Lowest player payout seat wins',
     modeHighest: 'Player Friendly',
     modeHighestDesc: 'Highest player bet seat wins',
-    seatControlTitle: 'Win / Loss Rates & Multipliers (A / B / C)',
+    seatControlTitle: 'Manual Win / Loss Rates & Multipliers (A / B / C)',
     seatControlHint:
-      'Adjust each seat win rate from 0% to 100% — loss rate updates automatically.',
+      'Set each seat win rate manually from 0% to 100% (players can bet on max 2 seats). Setting 0% means no win!',
+    presetZero: '0% (No Win)',
     presetBalanced: 'Balanced 33%',
     presetFocusA: 'Focus A (60%)',
     presetFocusB: 'Focus B (60%)',
     presetFocusC: 'Focus C (60%)',
+    zeroWinBanner: 'All seats are 0% — Players cannot win while manual mode is active.',
     winRate: 'Win Rate',
     lossRate: 'Loss Rate',
     multiplier: 'Multiplier',
-    normalized: 'Actual',
+    normalized: 'Manual Win',
     showMultOnBoard: 'Show Multiplier on A / B / C Boxes',
     showMultDesc: 'Display ×2.9 / ×3 directly on seat headers',
     forceWinnerTitle: 'Manual Winner Override',
@@ -265,22 +267,24 @@ const DICT = {
     modeWeighted: 'نسب مخصصة %',
     modeWeightedDesc: 'تطبيق نسب المكسب والخسارة التي تحددها بدقة',
     modeFair: 'عشوائي عادل',
-    modeFairDesc: 'توزيع عشوائي طبيعي (~33.3% لكل كرسي)',
+    modeFairDesc: 'توزيع عشوائي طبيعي (~33.3% لكل مقعد)',
     modeLowest: 'ربح البيت',
-    modeLowestDesc: 'فوز الكرسي الأقل تكلفة على اللعبة',
+    modeLowestDesc: 'فوز المقعد الأقل تكلفة على اللعبة',
     modeHighest: 'صديق اللاعب',
-    modeHighestDesc: 'فوز الكرسي صاحب أعلى رهان من اللاعب',
-    seatControlTitle: 'نسب المكسب والخسارة ومعامل الضرب (A / B / C)',
+    modeHighestDesc: 'فوز المقعد صاحب أعلى رهان من اللاعب',
+    seatControlTitle: 'نسب المكسب والخسارة اليدوية ومعامل الضرب (A / B / C)',
     seatControlHint:
-      'ارفع أو خفض نسبة المكسب من 0% إلى 100% لكل كرسي — نسبة الخسارة تتحدث تلقائياً.',
+      'حدد نسبة المكسب يدوياً لكل مقعد من 0% إلى 100% (اللاعب يراهن على مقعدين فقط كحد أقصى). وضع 0% يعني لا يوجد مكسب!',
+    presetZero: '0% (بدون مكسب)',
     presetBalanced: 'متوازن 33%',
     presetFocusA: 'تركيز A (60%)',
     presetFocusB: 'تركيز B (60%)',
     presetFocusC: 'تركيز C (60%)',
+    zeroWinBanner: 'جميع المقاعد مضبوطة على 0% — لا يوجد مكسب للاعبين حالياً.',
     winRate: 'نسبة المكسب',
     lossRate: 'نسبة الخسارة',
     multiplier: 'معامل الضرب',
-    normalized: 'الفعلي',
+    normalized: 'المكسب اليدوي',
     showMultOnBoard: 'إظهار معامل الضرب على A / B / C',
     showMultDesc: 'عرض ×2.9 أو ×3 مباشرة أعلى صناديق الرهان',
     forceWinnerTitle: 'تحديد الفائز يدوياً',
@@ -1021,10 +1025,11 @@ DATABASE_FILE=teen-patti-db.json`;
                   {/* Quick Presets */}
                   <div className="flex flex-wrap gap-1.5">
                     {[
-                      { label: t.presetBalanced, rates: { A: 33.3, B: 33.3, C: 33.4 } },
-                      { label: t.presetFocusA, rates: { A: 60, B: 20, C: 20 } },
-                      { label: t.presetFocusB, rates: { A: 20, B: 60, C: 20 } },
-                      { label: t.presetFocusC, rates: { A: 20, B: 20, C: 60 } },
+                      { label: t.presetZero, rates: { A: 0, B: 0, C: 0 }, danger: true },
+                      { label: t.presetBalanced, rates: { A: 33.3, B: 33.3, C: 33.4 }, danger: false },
+                      { label: t.presetFocusA, rates: { A: 60, B: 20, C: 20 }, danger: false },
+                      { label: t.presetFocusB, rates: { A: 20, B: 60, C: 20 }, danger: false },
+                      { label: t.presetFocusC, rates: { A: 20, B: 20, C: 60 }, danger: false },
                     ].map((preset) => (
                       <button
                         key={preset.label}
@@ -1036,20 +1041,30 @@ DATABASE_FILE=teen-patti-db.json`;
                             winRates: preset.rates,
                           }))
                         }
-                        className="px-2 py-1 rounded-md bg-[#21262d] hover:bg-[#30363d] text-[10.5px] font-semibold text-[#cbd5e1] border border-[#30363d] cursor-pointer"
+                        className={`px-2 py-1 rounded-md text-[10.5px] font-semibold border cursor-pointer ${
+                          preset.danger
+                            ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border-rose-500/40'
+                            : 'bg-[#21262d] hover:bg-[#30363d] text-[#cbd5e1] border-[#30363d]'
+                        }`}
                       >
                         {preset.label}
                       </button>
                     ))}
                   </div>
 
+                  {config.outcomeMode === 'weighted' &&
+                    probs.A + probs.B + probs.C === 0 && (
+                      <div className="px-3 py-2 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-[11.5px] font-semibold">
+                        {t.zeroWinBanner}
+                      </div>
+                    )}
+
                   {/* Individual Seat Cards */}
                   <div className="space-y-2.5">
                     {SEATS.map((seat) => {
                       const info = SEAT_CONFIG[seat];
-                      const rawWin = config.winRates[seat];
-                      const normWin = probs[seat];
-                      const lossRate = Math.max(0, 100 - normWin);
+                      const exactWin = probs[seat];
+                      const lossRate = Math.max(0, 100 - exactWin);
                       const mult = config.multipliers[seat];
 
                       return (
@@ -1070,8 +1085,12 @@ DATABASE_FILE=teen-patti-db.json`;
                                 </div>
                                 <div className="text-[10.5px] text-[#94a3b8] tabular-nums">
                                   {t.normalized}:{' '}
-                                  <span className="text-emerald-400 font-bold">
-                                    {normWin.toFixed(1)}%
+                                  <span
+                                    className={`font-bold ${
+                                      exactWin > 0 ? 'text-emerald-400' : 'text-rose-400'
+                                    }`}
+                                  >
+                                    {exactWin.toFixed(1)}%
                                   </span>{' '}
                                   · {t.lossRate}:{' '}
                                   <span className="text-rose-400 font-bold">
@@ -1111,20 +1130,43 @@ DATABASE_FILE=teen-patti-db.json`;
                             </div>
                           </div>
 
-                          {/* Win Rate Slider (0% - 100%) */}
-                          <div className="space-y-1">
-                            <div className="flex items-center justify-between text-[11px]">
+                          {/* Manual Win Rate Input + Slider (0% - 100%) */}
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between gap-2 text-[11px]">
                               <span className="text-[#94a3b8]">{t.winRate} (0–100%)</span>
-                              <span className="font-bold text-white tabular-nums">
-                                {rawWin.toFixed(1)}%
-                              </span>
+                              <div className="flex items-center gap-1 bg-[#161b22] border border-[#30363d] rounded px-1.5 py-0.5" dir="ltr">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  step={0.5}
+                                  value={exactWin}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    const parsed = raw === '' ? 0 : parseFloat(raw);
+                                    if (!Number.isNaN(parsed)) {
+                                      const clamped = Math.max(0, Math.min(100, parsed));
+                                      updateConfig((prev) => ({
+                                        ...prev,
+                                        outcomeMode: 'weighted',
+                                        winRates: {
+                                          ...prev.winRates,
+                                          [seat]: clamped,
+                                        },
+                                      }));
+                                    }
+                                  }}
+                                  className="w-14 bg-transparent text-white font-extrabold text-[12px] text-center focus:outline-none tabular-nums"
+                                />
+                                <span className="text-[11px] font-bold text-[#94a3b8]">%</span>
+                              </div>
                             </div>
                             <input
                               type="range"
                               min={0}
                               max={100}
                               step={0.5}
-                              value={rawWin}
+                              value={exactWin}
                               onChange={(e) => {
                                 const val = parseFloat(e.target.value);
                                 updateConfig((prev) => ({
@@ -1141,7 +1183,7 @@ DATABASE_FILE=teen-patti-db.json`;
                             <div className="h-1.5 w-full rounded-full bg-[#21262d] overflow-hidden">
                               <div
                                 className={`h-full ${info.barClass} transition-all duration-200`}
-                                style={{ width: `${Math.min(100, normWin)}%` }}
+                                style={{ width: `${Math.min(100, exactWin)}%` }}
                               />
                             </div>
                           </div>

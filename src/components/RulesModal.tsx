@@ -76,10 +76,11 @@ export const RulesModal: React.FC<RulesModalProps> = ({
         <div className="rounded-lg bg-[#fdf5e4] border border-[#ebd3a2] p-3.5 text-[13px] leading-relaxed">
           <p className="font-bold text-[#7c4d12] mb-1">How to Play</p>
           <p>
-            Select a chip denomination at the bottom, then tap Royal Throne{' '}
-            <strong>A</strong>, <strong>B</strong>, or <strong>C</strong> before the
-            countdown ends. When cards flip, the throne with the highest 3-card Teen
-            Patti hand wins and pays{' '}
+            Select a chip denomination at the bottom, then tap up to{' '}
+            <strong>2 Royal Thrones</strong> out of <strong>A</strong>,{' '}
+            <strong>B</strong>, or <strong>C</strong> before the countdown ends.
+            When all 3 hands flip, the throne with the highest 3-card Teen Patti
+            hand wins and pays{' '}
             {sameMultiplier ? (
               <strong className="text-[#9e2598]">{multipliers.A}×</strong>
             ) : (

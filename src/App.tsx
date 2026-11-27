@@ -14,6 +14,7 @@ import {
   HandEvaluation,
   INITIAL_HISTORY,
   isSafeCoinIconUrl,
+  MAX_BET_SEATS_PER_ROUND,
   RoundHistoryItem,
   SEAT_CONFIG,
   SeatId,
@@ -52,7 +53,7 @@ interface FlyingChip {
 const SEATS: SeatId[] = ['A', 'B', 'C'];
 const DEFAULT_STARTING_BALANCE = 100_000;
 const INITIAL_ROUND_NUMBER = 1511;
-const CONFIG_STORAGE_KEY = 'teen_patti_royal_config_v3';
+const CONFIG_STORAGE_KEY = 'teen_patti_royal_config_v5';
 const PLAYER_ID_STORAGE_KEY = 'teen_patti_player_id_v1';
 
 const APP_MODE: AppMode = (() => {
@@ -95,17 +96,26 @@ function loadSavedConfig(): GameControlConfig {
       typeof parsed.coinIconUrl === 'string' && isSafeCoinIconUrl(parsed.coinIconUrl)
         ? parsed.coinIconUrl
         : DEFAULT_COIN_ICON;
+    const forced =
+      parsed.forceNextWinner === 'A' ||
+      parsed.forceNextWinner === 'B' ||
+      parsed.forceNextWinner === 'C'
+        ? parsed.forceNextWinner
+        : null;
     return {
       ...DEFAULT_GAME_CONFIG,
       ...parsed,
+      forceNextWinner: forced,
       coinIconUrl: coinUrl,
       winRates: {
-        ...DEFAULT_GAME_CONFIG.winRates,
-        ...(parsed.winRates || {}),
+        A: parsed.winRates?.A ?? DEFAULT_GAME_CONFIG.winRates.A,
+        B: parsed.winRates?.B ?? DEFAULT_GAME_CONFIG.winRates.B,
+        C: parsed.winRates?.C ?? DEFAULT_GAME_CONFIG.winRates.C,
       },
       multipliers: {
-        ...DEFAULT_GAME_CONFIG.multipliers,
-        ...(parsed.multipliers || {}),
+        A: parsed.multipliers?.A ?? DEFAULT_GAME_CONFIG.multipliers.A,
+        B: parsed.multipliers?.B ?? DEFAULT_GAME_CONFIG.multipliers.B,
+        C: parsed.multipliers?.C ?? DEFAULT_GAME_CONFIG.multipliers.C,
       },
       chipValues:
         Array.isArray(parsed.chipValues) && parsed.chipValues.length === 4
@@ -288,7 +298,10 @@ export default function App() {
         setStats(payload.stats);
       }
       if (payload.history && payload.history.length > 0) {
-        setHistory(payload.history);
+        const validHistory = payload.history.filter(
+          (item) => item.winner === 'A' || item.winner === 'B' || item.winner === 'C'
+        );
+        if (validHistory.length > 0) setHistory(validHistory);
       }
       if (typeof payload.currentRoundNumber === 'number') {
         setRoundNumber(payload.currentRoundNumber);
@@ -551,7 +564,7 @@ export default function App() {
           : [1000, 1000, 2000, 3000, 5000];
 
       potSimInterval = window.setInterval(() => {
-        const seat = SEATS[Math.floor(Math.random() * 3)];
+        const seat = SEATS[Math.floor(Math.random() * SEATS.length)];
         const delta = betPool[Math.floor(Math.random() * betPool.length)];
         setPots((prev) => ({
           ...prev,
@@ -645,7 +658,7 @@ export default function App() {
     }, 450);
   }, []);
 
-  // Place bet on Seat A, B, or C
+  // Place bet on Seat A, B, or C (maximum 2 distinct seats per round)
   const handlePlaceBet = useCallback(
     (seat: SeatId) => {
       if (phase === 'CONNECTING') return;
@@ -653,6 +666,14 @@ export default function App() {
         showToast('Wait for next round...');
         return;
       }
+
+      const currentBets = userBetsRef.current;
+      const activeSeatsCount = SEATS.filter((s) => currentBets[s] > 0).length;
+      if (currentBets[seat] === 0 && activeSeatsCount >= MAX_BET_SEATS_PER_ROUND) {
+        showToast('You can only bet on 2 seats per round');
+        return;
+      }
+
       if (balance < selectedChipValue) {
         showToast('Not enough coins — Top Up!');
         setShowTopUp(true);
@@ -965,6 +986,11 @@ export default function App() {
               const isRevealed = phase === 'REVEAL';
               const isWinSeat = isRevealed && winner === seat;
               const isDimmed = isRevealed && winner !== seat;
+              const activeBetCount = SEATS.filter((s) => userBets[s] > 0).length;
+              const isSeatLockedByLimit =
+                phase === 'BETTING' &&
+                activeBetCount >= MAX_BET_SEATS_PER_ROUND &&
+                userBets[seat] === 0;
 
               return (
                 <button
@@ -973,8 +999,12 @@ export default function App() {
                   onClick={() => handlePlaceBet(seat)}
                   aria-label={`Bet on Throne ${seat}`}
                   className={`relative w-full h-full min-h-0 max-h-[170px] sm:max-h-[140px] flex items-center justify-center p-0.5 cursor-pointer transition-all duration-200 focus-visible:outline-2 focus-visible:outline-[#7c4d12] rounded-lg ${
-                    phase === 'BETTING' ? 'hover:-translate-y-1 active:scale-95' : ''
-                  } ${isWinSeat ? 'scale-105 z-20' : ''}`}
+                    phase === 'BETTING' && !isSeatLockedByLimit
+                      ? 'hover:-translate-y-1 active:scale-95'
+                      : ''
+                  } ${isWinSeat ? 'scale-105 z-20' : ''} ${
+                    isSeatLockedByLimit ? 'opacity-55 grayscale-[35%]' : ''
+                  }`}
                 >
                   <img
                     src={SEAT_CONFIG[seat].throneImg}
@@ -994,7 +1024,7 @@ export default function App() {
             })}
           </section>
 
-          {/* ================= 3 BETTING BOXES (A, B, C) ================= */}
+          {/* ================= 3 BETTING BOXES (A, B, C — MAX 2 BETS PER ROUND) ================= */}
           <section
             aria-label="Betting Boxes"
             className="relative grid grid-cols-3 gap-2 sm:gap-2.5 px-2.5 pb-1.5 z-20 shrink-0"
@@ -1004,6 +1034,11 @@ export default function App() {
               const isWinSeat = isRevealed && winner === seat;
               const isDimmed = isRevealed && winner !== seat;
               const mult = config.multipliers[seat];
+              const activeBetCount = SEATS.filter((s) => userBets[s] > 0).length;
+              const isSeatLockedByLimit =
+                phase === 'BETTING' &&
+                activeBetCount >= MAX_BET_SEATS_PER_ROUND &&
+                userBets[seat] === 0;
 
               return (
                 <button
@@ -1019,10 +1054,10 @@ export default function App() {
                       ? 'border-[#fff1a8] winner-seat-glow z-20'
                       : 'border-[#c59a4d] shadow-[0_2px_4px_rgba(82,50,12,0.18)]'
                   } ${
-                    phase === 'BETTING'
+                    phase === 'BETTING' && !isSeatLockedByLimit
                       ? 'hover:brightness-[1.03] active:scale-[0.98]'
                       : ''
-                  }`}
+                  } ${isSeatLockedByLimit ? 'opacity-65' : ''}`}
                 >
                   {/* Floating Win Payout Badge */}
                   {isWinSeat && lastWinAmount > 0 && (
@@ -1038,6 +1073,8 @@ export default function App() {
                     className={`py-2 sm:py-2.5 flex items-center justify-center gap-1.5 transition-colors ${
                       isWinSeat
                         ? 'bg-gradient-to-b from-[#f0c56c] to-[#e4b354]'
+                        : isSeatLockedByLimit
+                        ? 'bg-[#b38f52]'
                         : 'bg-[#d5a858]'
                     }`}
                   >
@@ -1061,7 +1098,7 @@ export default function App() {
                   {/* Bottom Your Bet Band */}
                   <div className="py-1.5 sm:py-2 bg-[#f8e4bc]">
                     <span className="text-[12.5px] sm:text-[14.5px] font-bold text-[#9c259b] tabular-nums whitespace-nowrap">
-                      You: {formatCoins(userBets[seat])}
+                      {isSeatLockedByLimit ? 'Max 2' : `You: ${formatCoins(userBets[seat])}`}
                     </span>
                   </div>
 

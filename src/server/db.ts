@@ -184,8 +184,15 @@ function sanitizeConfigPatch(
     next.outcomeMode = patch.outcomeMode;
   }
 
-  if (patch.forceNextWinner === null || patch.forceNextWinner === 'A' || patch.forceNextWinner === 'B' || patch.forceNextWinner === 'C') {
+  if (
+    patch.forceNextWinner === null ||
+    patch.forceNextWinner === 'A' ||
+    patch.forceNextWinner === 'B' ||
+    patch.forceNextWinner === 'C'
+  ) {
     next.forceNextWinner = patch.forceNextWinner;
+  } else if (patch.forceNextWinner !== undefined) {
+    next.forceNextWinner = null;
   }
 
   if (typeof patch.lockForcedWinner === 'boolean') {
@@ -293,9 +300,14 @@ export class JsonFileTeenPattiDatabase implements ITeenPattiDatabase {
           typeof parsed.currentRoundNumber === 'number' && Number.isFinite(parsed.currentRoundNumber)
             ? Math.max(1, Math.floor(parsed.currentRoundNumber))
             : INITIAL_ROUND_NUMBER,
-        history: Array.isArray(parsed.history) && parsed.history.length > 0
-          ? parsed.history.slice(0, 50)
-          : [...INITIAL_HISTORY],
+        history: (() => {
+          const valid = Array.isArray(parsed.history)
+            ? parsed.history
+                .filter((h) => h && (h.winner === 'A' || h.winner === 'B' || h.winner === 'C'))
+                .slice(0, 50)
+            : [];
+          return valid.length > 0 ? valid : [...INITIAL_HISTORY];
+        })(),
         stats: {
           roundsPlayed: Number(parsed.stats?.roundsPlayed) || 0,
           totalWagered: Number(parsed.stats?.totalWagered) || 0,
