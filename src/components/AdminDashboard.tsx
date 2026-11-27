@@ -11,11 +11,11 @@ import {
   ExternalLink,
   Globe,
   Image as ImageIcon,
-  Languages,
   Lock,
   LogOut,
   RefreshCw,
   RotateCcw,
+  Save,
   Server,
   ShieldCheck,
   Sliders,
@@ -136,29 +136,29 @@ const DICT = {
     applyServerUrl: 'Connect',
     // Seats tab
     outcomeModeTitle: 'Round Outcome Mode',
-    modeWeighted: 'Custom Win Rates %',
-    modeWeightedDesc: 'Applies your exact win/loss slider percentages',
+    modeWeighted: 'Unified Win Rate %',
+    modeWeightedDesc: 'Single 0–100% rate with natural A · B · C rotation',
     modeFair: 'Fair Random',
     modeFairDesc: 'Pure 52-card shuffle (~33.3% each)',
     modeLowest: 'House Profit',
     modeLowestDesc: 'Lowest player payout seat wins',
     modeHighest: 'Player Friendly',
     modeHighestDesc: 'Highest player bet seat wins',
-    seatControlTitle: 'Manual Win / Loss Rates & Multipliers (A / B / C)',
+    seatControlTitle: 'Unified Win Rate (A · B · C)',
     seatControlHint:
-      'Set each seat win rate manually from 0% to 100% (players can bet on max 2 seats). Setting 0% means no win!',
+      'One control (0% to 100%) for all 3 seats. Winners rotate naturally across A, B & C (switching + occasional repeats) while matching your exact rate.',
+    multipliersTitle: 'Seat Multipliers (A / B / C)',
     presetZero: '0% (No Win)',
-    presetBalanced: 'Balanced 33%',
-    presetFocusA: 'Focus A (60%)',
-    presetFocusB: 'Focus B (60%)',
-    presetFocusC: 'Focus C (60%)',
-    zeroWinBanner: 'All seats are 0% — Players cannot win while manual mode is active.',
+    zeroWinBanner: 'Win rate is 0% — Players will not win on any seat.',
     winRate: 'Win Rate',
     lossRate: 'Loss Rate',
     multiplier: 'Multiplier',
-    normalized: 'Manual Win',
     showMultOnBoard: 'Show Multiplier on A / B / C Boxes',
     showMultDesc: 'Display ×2.9 / ×3 directly on seat headers',
+    saveDataBtn: 'Save Data',
+    savingBtn: 'Saving...',
+    unsavedChanges: 'Unsaved changes — click Save Data to apply',
+    savedSuccess: 'Data saved successfully!',
     forceWinnerTitle: 'Manual Winner Override',
     randomMode: 'Automatic',
     lockForced: 'Lock forced winner for all upcoming rounds',
@@ -264,29 +264,29 @@ const DICT = {
     applyServerUrl: 'اتصال',
     // Seats tab
     outcomeModeTitle: 'وضع تحديد النتيجة',
-    modeWeighted: 'نسب مخصصة %',
-    modeWeightedDesc: 'تطبيق نسب المكسب والخسارة التي تحددها بدقة',
+    modeWeighted: 'نسبة المكسب الموحدة %',
+    modeWeightedDesc: 'زر واحد (0–100%) مع تنقل وتوزيع طبيعي بين A و B و C',
     modeFair: 'عشوائي عادل',
     modeFairDesc: 'توزيع عشوائي طبيعي (~33.3% لكل مقعد)',
     modeLowest: 'ربح البيت',
     modeLowestDesc: 'فوز المقعد الأقل تكلفة على اللعبة',
     modeHighest: 'صديق اللاعب',
     modeHighestDesc: 'فوز المقعد صاحب أعلى رهان من اللاعب',
-    seatControlTitle: 'نسب المكسب والخسارة اليدوية ومعامل الضرب (A / B / C)',
+    seatControlTitle: 'نسبة المكسب الموحدة (A · B · C)',
     seatControlHint:
-      'حدد نسبة المكسب يدوياً لكل مقعد من 0% إلى 100% (اللاعب يراهن على مقعدين فقط كحد أقصى). وضع 0% يعني لا يوجد مكسب!',
+      'زر واحد من 0% إلى 100% للمقاعد الثلاثة مع إدخال رقم يدوي. يتم التنقل والتوزيع التدريجي تلقائياً بين A و B و C (تغيير وتكرار طبيعي) حسب النسبة.',
+    multipliersTitle: 'معاملات الضرب للمقاعد (A / B / C)',
     presetZero: '0% (بدون مكسب)',
-    presetBalanced: 'متوازن 33%',
-    presetFocusA: 'تركيز A (60%)',
-    presetFocusB: 'تركيز B (60%)',
-    presetFocusC: 'تركيز C (60%)',
-    zeroWinBanner: 'جميع المقاعد مضبوطة على 0% — لا يوجد مكسب للاعبين حالياً.',
+    zeroWinBanner: 'نسبة المكسب 0% — لا يوجد مكسب للاعبين على أي مقعد.',
     winRate: 'نسبة المكسب',
     lossRate: 'نسبة الخسارة',
-    multiplier: 'معامل الضرب',
-    normalized: 'المكسب اليدوي',
+    multiplier: 'الضرب',
     showMultOnBoard: 'إظهار معامل الضرب على A / B / C',
     showMultDesc: 'عرض ×2.9 أو ×3 مباشرة أعلى صناديق الرهان',
+    saveDataBtn: 'حفظ البيانات',
+    savingBtn: 'جاري الحفظ...',
+    unsavedChanges: 'يوجد تعديلات غير محفوظة — اضغط حفظ البيانات للتطبيق',
+    savedSuccess: 'تم حفظ البيانات بنجاح!',
     forceWinnerTitle: 'تحديد الفائز يدوياً',
     randomMode: 'تلقائي',
     lockForced: 'تثبيت الفائز المختار لجميع الجولات القادمة',
@@ -487,38 +487,75 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => window.clearInterval(interval);
   }, [adminToken, backendReachable, open, standalone, refreshAdminOverview]);
 
-  // Debounced server config save
-  const saveTimerRef = useRef<number | null>(null);
-  const persistConfigToServer = useCallback(
-    (nextConfig: GameControlConfig) => {
-      if (!adminToken || !backendReachable) return;
-      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = window.setTimeout(async () => {
-        try {
-          await saveAdminConfig(apiBase, adminToken, nextConfig);
-          setSyncNotice(t.savingToServer);
-          window.setTimeout(() => setSyncNotice(null), 1500);
-        } catch (err) {
-          const status = (err as Error & { status?: number }).status;
-          if (status === 401) {
-            onAdminTokenChange(null);
-          }
-        }
-      }, 220);
-    },
-    [adminToken, backendReachable, apiBase, t.savingToServer, onAdminTokenChange]
-  );
+  // Draft config state so edits require clicking explicit "Save Data" button
+  const [draftConfig, setDraftConfig] = useState<GameControlConfig>(config);
+  const [savingConfig, setSavingConfig] = useState(false);
+
+  const hasUnsavedChanges = JSON.stringify(draftConfig) !== JSON.stringify(config);
+  const hasUnsavedRef = useRef(hasUnsavedChanges);
+  useEffect(() => {
+    hasUnsavedRef.current = hasUnsavedChanges;
+  }, [hasUnsavedChanges]);
+
+  // Keep draft synced with incoming server config only when there are no local unsaved edits
+  useEffect(() => {
+    if (!hasUnsavedRef.current) {
+      setDraftConfig(config);
+    }
+  }, [config]);
 
   const updateConfig = useCallback(
     (updater: (prev: GameControlConfig) => GameControlConfig) => {
-      onChangeConfig((prev) => {
-        const next = updater(prev);
-        persistConfigToServer(next);
-        return next;
-      });
+      setDraftConfig((prev) => updater(prev));
     },
-    [onChangeConfig, persistConfigToServer]
+    []
   );
+
+  const handleSaveData = useCallback(async () => {
+    setSavingConfig(true);
+    try {
+      const normalizedRate = Math.min(
+        100,
+        Math.max(0, Number.isFinite(draftConfig.globalWinRate) ? draftConfig.globalWinRate : 0)
+      );
+      const payload: GameControlConfig = {
+        ...draftConfig,
+        globalWinRate: normalizedRate,
+        winRates: {
+          A: normalizedRate,
+          B: normalizedRate,
+          C: normalizedRate,
+        },
+      };
+      onChangeConfig(() => payload);
+      setDraftConfig(payload);
+
+      if (adminToken && backendReachable) {
+        const res = await saveAdminConfig(apiBase, adminToken, payload);
+        onSyncServerState({ config: res.config });
+        setDraftConfig(res.config);
+      }
+
+      setSyncNotice(t.savedSuccess);
+      window.setTimeout(() => setSyncNotice(null), 2400);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status;
+      if (status === 401) {
+        onAdminTokenChange(null);
+      }
+    } finally {
+      setSavingConfig(false);
+    }
+  }, [
+    draftConfig,
+    onChangeConfig,
+    adminToken,
+    backendReachable,
+    apiBase,
+    onSyncServerState,
+    t.savedSuccess,
+    onAdminTokenChange,
+  ]);
 
   if (!open && !standalone) return null;
 
@@ -587,11 +624,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const base64 = btoa(binary);
         const res = await uploadAdminCoinIcon(apiBase, adminToken, base64);
         onChangeConfig((prev) => ({ ...prev, coinIconUrl: res.coinIconUrl }));
+        setDraftConfig((prev) => ({ ...prev, coinIconUrl: res.coinIconUrl }));
         setCoinMessage({ type: 'ok', text: t.coinUpdated });
       } else {
         // Static/local preview fallback using object URL
         const blobUrl = URL.createObjectURL(file);
         onChangeConfig((prev) => ({ ...prev, coinIconUrl: blobUrl }));
+        setDraftConfig((prev) => ({ ...prev, coinIconUrl: blobUrl }));
         setCoinMessage({ type: 'ok', text: t.coinUpdated });
       }
     } catch (err) {
@@ -611,8 +650,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (adminToken && backendReachable) {
         const res = await deleteAdminCoinIcon(apiBase, adminToken);
         onChangeConfig((prev) => ({ ...prev, coinIconUrl: res.coinIconUrl }));
+        setDraftConfig((prev) => ({ ...prev, coinIconUrl: res.coinIconUrl }));
       } else {
         onChangeConfig((prev) => ({ ...prev, coinIconUrl: DEFAULT_COIN_ICON }));
+        setDraftConfig((prev) => ({ ...prev, coinIconUrl: DEFAULT_COIN_ICON }));
       }
       setCoinMessage({ type: 'ok', text: t.coinReset });
     } catch (err) {
@@ -643,10 +684,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       try {
         const res = await resetAdminConfig(apiBase, adminToken);
         onSyncServerState({ config: res.config });
+        setDraftConfig(res.config);
+        return;
       } catch {
         // ignore
       }
     }
+    setDraftConfig((prev) => ({
+      ...prev,
+      globalWinRate: 35,
+      winRates: { A: 35, B: 35, C: 35 },
+      multipliers: { A: 2.9, B: 2.9, C: 2.9 },
+      outcomeMode: 'weighted',
+      forceNextWinner: null,
+      lockForcedWinner: false,
+      showMultipliersOnBoard: false,
+      chipValues: [1000, 10000, 50000, 100000],
+      roundDuration: 23,
+      revealDuration: 4.5,
+      botsEnabled: true,
+      botActivity: 'medium',
+      playerName: 'mr jack',
+      userId: '21027209',
+    }));
   };
 
   const handleSavePlayerBalance = async (playerId: string) => {
@@ -672,9 +732,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     window.setTimeout(() => setCopiedKey(null), 1600);
   };
 
-  const probs = getNormalizedWinProbs(config.winRates);
+  const probs = getNormalizedWinProbs(draftConfig.winRates);
+  const unifiedWinRate = Math.min(
+    100,
+    Math.max(0, Number.isFinite(draftConfig.globalWinRate) ? draftConfig.globalWinRate : 0)
+  );
+  const unifiedLossRate = Math.max(0, 100 - unifiedWinRate);
   const netHouseProfit = stats.totalWagered - stats.totalPayouts;
-  const resolvedCoinPreview = resolveCoinIconSrc(config.coinIconUrl, apiBase);
+  const resolvedCoinPreview = resolveCoinIconSrc(draftConfig.coinIconUrl, apiBase);
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://your-game-server.com';
   const adminDirectUrl = `${currentOrigin}/admin`;
   const envSnippet = `# Deploy standalone Admin Dashboard on Vercel / Netlify
@@ -972,6 +1037,24 @@ DATABASE_FILE=teen-patti-db.json`;
             {/* ==================== TAB 1: SEATS & ODDS ==================== */}
             {activeTab === 'seats' && (
               <>
+                {/* Unsaved Changes Reminder Banner */}
+                {hasUnsavedChanges && (
+                  <div className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/45 flex items-center justify-between gap-2">
+                    <span className="text-[11.5px] font-semibold text-amber-200">
+                      {t.unsavedChanges}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={savingConfig}
+                      onClick={handleSaveData}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-[#0d1117] text-[11px] font-extrabold flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      <Save className="w-3 h-3" />
+                      {savingConfig ? t.savingBtn : t.saveDataBtn}
+                    </button>
+                  </div>
+                )}
+
                 {/* Outcome Mode Selector */}
                 <div className="rounded-xl bg-[#161b22] border border-[#2d3748] p-3 space-y-2.5">
                   <div className="flex items-center gap-1.5 text-[12.5px] font-bold text-amber-300">
@@ -987,7 +1070,7 @@ DATABASE_FILE=teen-patti-db.json`;
                         { id: 'highest_bet', title: t.modeHighest, desc: t.modeHighestDesc },
                       ] as { id: OutcomeMode; title: string; desc: string }[]
                     ).map((m) => {
-                      const selected = config.outcomeMode === m.id;
+                      const selected = draftConfig.outcomeMode === m.id;
                       return (
                         <button
                           key={m.id}
@@ -1011,25 +1094,120 @@ DATABASE_FILE=teen-patti-db.json`;
                   </div>
                 </div>
 
-                {/* Per-Seat Win/Loss Rates & Multipliers */}
-                <div className="rounded-xl bg-[#161b22] border border-[#2d3748] p-3 space-y-3">
-                  <div>
-                    <h3 className="text-[13px] font-bold text-white">
-                      {t.seatControlTitle}
-                    </h3>
-                    <p className="text-[11px] text-[#94a3b8] mt-0.5">
-                      {t.seatControlHint}
-                    </p>
+                {/* SINGLE UNIFIED WIN RATE CONTROL (0% - 100%) FOR A · B · C */}
+                <div className="rounded-xl bg-[#161b22] border border-amber-500/35 p-3.5 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="text-[13.5px] font-bold text-white flex items-center gap-1.5">
+                        <Crown className="w-4 h-4 text-amber-400" />
+                        {t.seatControlTitle}
+                      </h3>
+                      <p className="text-[11px] text-[#94a3b8] leading-snug mt-0.5">
+                        {t.seatControlHint}
+                      </p>
+                    </div>
                   </div>
 
-                  {/* Quick Presets */}
+                  {/* Visual 3-Seat Chips Header */}
+                  <div className="flex items-center justify-between gap-2 rounded-lg bg-[#0d1117] border border-[#262c36] px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      {SEATS.map((seat) => (
+                        <div key={seat} className="flex items-center gap-1">
+                          <img
+                            src={SEAT_CONFIG[seat].throneImg}
+                            alt={SEAT_CONFIG[seat].name}
+                            className="w-5 h-5 object-contain"
+                          />
+                          <span className="text-[11px] font-bold text-[#cbd5e1]">{seat}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-[11px] font-bold tabular-nums flex items-center gap-2">
+                      <span
+                        className={
+                          unifiedWinRate > 0 ? 'text-emerald-400' : 'text-rose-400'
+                        }
+                      >
+                        {t.winRate}: {unifiedWinRate.toFixed(1)}%
+                      </span>
+                      <span className="text-[#475569]">·</span>
+                      <span className="text-rose-400">
+                        {t.lossRate}: {unifiedLossRate.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Single Slider (0% - 100%) + Manual Number Input */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[12px] font-semibold text-[#cbd5e1]">
+                        {t.winRate} (0–100%)
+                      </span>
+                      <div
+                        className="flex items-center gap-1 bg-[#0d1117] border border-amber-500/50 rounded-lg px-2.5 py-1"
+                        dir="ltr"
+                      >
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={0.5}
+                          value={unifiedWinRate}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const parsed = raw === '' ? 0 : parseFloat(raw);
+                            if (!Number.isNaN(parsed)) {
+                              const clamped = Math.max(0, Math.min(100, parsed));
+                              updateConfig((prev) => ({
+                                ...prev,
+                                outcomeMode: 'weighted',
+                                globalWinRate: clamped,
+                                winRates: { A: clamped, B: clamped, C: clamped },
+                              }));
+                            }
+                          }}
+                          className="w-16 bg-transparent text-amber-300 font-extrabold text-[14px] text-center focus:outline-none tabular-nums"
+                        />
+                        <span className="text-[12px] font-bold text-amber-400">%</span>
+                      </div>
+                    </div>
+
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={0.5}
+                      value={unifiedWinRate}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        updateConfig((prev) => ({
+                          ...prev,
+                          outcomeMode: 'weighted',
+                          globalWinRate: val,
+                          winRates: { A: val, B: val, C: val },
+                        }));
+                      }}
+                      className="w-full accent-amber-400 cursor-pointer h-2"
+                    />
+
+                    {/* Split Win / Loss Progress Bar */}
+                    <div className="h-2.5 w-full rounded-full bg-rose-500/35 overflow-hidden flex">
+                      <div
+                        className="h-full bg-gradient-to-r from-emerald-500 to-amber-400 transition-all duration-200"
+                        style={{ width: `${unifiedWinRate}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Quick Percentage Presets */}
                   <div className="flex flex-wrap gap-1.5">
                     {[
-                      { label: t.presetZero, rates: { A: 0, B: 0, C: 0 }, danger: true },
-                      { label: t.presetBalanced, rates: { A: 33.3, B: 33.3, C: 33.4 }, danger: false },
-                      { label: t.presetFocusA, rates: { A: 60, B: 20, C: 20 }, danger: false },
-                      { label: t.presetFocusB, rates: { A: 20, B: 60, C: 20 }, danger: false },
-                      { label: t.presetFocusC, rates: { A: 20, B: 20, C: 60 }, danger: false },
+                      { label: t.presetZero, val: 0, danger: true },
+                      { label: '25%', val: 25, danger: false },
+                      { label: '35%', val: 35, danger: false },
+                      { label: '50%', val: 50, danger: false },
+                      { label: '75%', val: 75, danger: false },
+                      { label: '100%', val: 100, danger: false },
                     ].map((preset) => (
                       <button
                         key={preset.label}
@@ -1038,11 +1216,16 @@ DATABASE_FILE=teen-patti-db.json`;
                           updateConfig((prev) => ({
                             ...prev,
                             outcomeMode: 'weighted',
-                            winRates: preset.rates,
+                            globalWinRate: preset.val,
+                            winRates: { A: preset.val, B: preset.val, C: preset.val },
                           }))
                         }
-                        className={`px-2 py-1 rounded-md text-[10.5px] font-semibold border cursor-pointer ${
-                          preset.danger
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-bold border cursor-pointer transition-colors ${
+                          unifiedWinRate === preset.val
+                            ? preset.danger
+                              ? 'bg-rose-600 text-white border-rose-400'
+                              : 'bg-amber-500 text-[#0d1117] border-amber-300'
+                            : preset.danger
                             ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border-rose-500/40'
                             : 'bg-[#21262d] hover:bg-[#30363d] text-[#cbd5e1] border-[#30363d]'
                         }`}
@@ -1052,140 +1235,62 @@ DATABASE_FILE=teen-patti-db.json`;
                     ))}
                   </div>
 
-                  {config.outcomeMode === 'weighted' &&
-                    probs.A + probs.B + probs.C === 0 && (
-                      <div className="px-3 py-2 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-[11.5px] font-semibold">
-                        {t.zeroWinBanner}
-                      </div>
-                    )}
+                  {draftConfig.outcomeMode === 'weighted' && unifiedWinRate === 0 && (
+                    <div className="px-3 py-2 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-[11.5px] font-semibold">
+                      {t.zeroWinBanner}
+                    </div>
+                  )}
+                </div>
 
-                  {/* Individual Seat Cards */}
-                  <div className="space-y-2.5">
+                {/* Compact Seat Multipliers (A / B / C) */}
+                <div className="rounded-xl bg-[#161b22] border border-[#2d3748] p-3 space-y-3">
+                  <div className="text-[12.5px] font-bold text-white">
+                    {t.multipliersTitle}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
                     {SEATS.map((seat) => {
                       const info = SEAT_CONFIG[seat];
-                      const exactWin = probs[seat];
-                      const lossRate = Math.max(0, 100 - exactWin);
-                      const mult = config.multipliers[seat];
-
+                      const mult = draftConfig.multipliers[seat];
                       return (
                         <div
                           key={seat}
-                          className="rounded-lg bg-[#0d1117] border border-[#262c36] p-2.5 space-y-2"
+                          className="rounded-lg bg-[#0d1117] border border-[#262c36] p-2 flex flex-col items-center gap-1.5"
                         >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              <img
-                                src={info.throneImg}
-                                alt={info.name}
-                                className="w-7 h-7 object-contain"
-                              />
-                              <div>
-                                <div className="text-[12.5px] font-bold text-white leading-tight">
-                                  {lang === 'ar' ? info.arabicName : info.name}
-                                </div>
-                                <div className="text-[10.5px] text-[#94a3b8] tabular-nums">
-                                  {t.normalized}:{' '}
-                                  <span
-                                    className={`font-bold ${
-                                      exactWin > 0 ? 'text-emerald-400' : 'text-rose-400'
-                                    }`}
-                                  >
-                                    {exactWin.toFixed(1)}%
-                                  </span>{' '}
-                                  · {t.lossRate}:{' '}
-                                  <span className="text-rose-400 font-bold">
-                                    {lossRate.toFixed(1)}%
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Independent Multiplier Control */}
-                            <div className="flex items-center gap-1 bg-[#161b22] border border-[#30363d] rounded-md px-2 py-1">
-                              <span className="text-[10.5px] text-[#94a3b8]">
-                                {t.multiplier}
-                              </span>
-                              <input
-                                type="number"
-                                step="0.1"
-                                min="1.1"
-                                max="20"
-                                value={mult}
-                                onChange={(e) => {
-                                  const v = parseFloat(e.target.value);
-                                  if (!Number.isNaN(v)) {
-                                    updateConfig((prev) => ({
-                                      ...prev,
-                                      multipliers: {
-                                        ...prev.multipliers,
-                                        [seat]: Math.max(1.1, Math.min(20, v)),
-                                      },
-                                    }));
-                                  }
-                                }}
-                                className="w-12 bg-transparent text-amber-300 font-extrabold text-[12.5px] text-center focus:outline-none tabular-nums"
-                                dir="ltr"
-                              />
-                              <span className="text-[11px] font-bold text-amber-400">×</span>
-                            </div>
-                          </div>
-
-                          {/* Manual Win Rate Input + Slider (0% - 100%) */}
-                          <div className="space-y-1.5">
-                            <div className="flex items-center justify-between gap-2 text-[11px]">
-                              <span className="text-[#94a3b8]">{t.winRate} (0–100%)</span>
-                              <div className="flex items-center gap-1 bg-[#161b22] border border-[#30363d] rounded px-1.5 py-0.5" dir="ltr">
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={100}
-                                  step={0.5}
-                                  value={exactWin}
-                                  onChange={(e) => {
-                                    const raw = e.target.value;
-                                    const parsed = raw === '' ? 0 : parseFloat(raw);
-                                    if (!Number.isNaN(parsed)) {
-                                      const clamped = Math.max(0, Math.min(100, parsed));
-                                      updateConfig((prev) => ({
-                                        ...prev,
-                                        outcomeMode: 'weighted',
-                                        winRates: {
-                                          ...prev.winRates,
-                                          [seat]: clamped,
-                                        },
-                                      }));
-                                    }
-                                  }}
-                                  className="w-14 bg-transparent text-white font-extrabold text-[12px] text-center focus:outline-none tabular-nums"
-                                />
-                                <span className="text-[11px] font-bold text-[#94a3b8]">%</span>
-                              </div>
-                            </div>
-                            <input
-                              type="range"
-                              min={0}
-                              max={100}
-                              step={0.5}
-                              value={exactWin}
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value);
-                                updateConfig((prev) => ({
-                                  ...prev,
-                                  outcomeMode: 'weighted',
-                                  winRates: {
-                                    ...prev.winRates,
-                                    [seat]: val,
-                                  },
-                                }));
-                              }}
-                              className="w-full accent-amber-400 cursor-pointer"
+                          <div className="flex items-center gap-1.5">
+                            <img
+                              src={info.throneImg}
+                              alt={info.name}
+                              className="w-5 h-5 object-contain"
                             />
-                            <div className="h-1.5 w-full rounded-full bg-[#21262d] overflow-hidden">
-                              <div
-                                className={`h-full ${info.barClass} transition-all duration-200`}
-                                style={{ width: `${Math.min(100, exactWin)}%` }}
-                              />
-                            </div>
+                            <span className="text-[12px] font-bold text-white">
+                              Seat {seat}
+                            </span>
+                          </div>
+                          <div
+                            className="flex items-center gap-0.5 bg-[#161b22] border border-[#30363d] rounded px-1.5 py-0.5"
+                            dir="ltr"
+                          >
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="1.1"
+                              max="20"
+                              value={mult}
+                              onChange={(e) => {
+                                const v = parseFloat(e.target.value);
+                                if (!Number.isNaN(v)) {
+                                  updateConfig((prev) => ({
+                                    ...prev,
+                                    multipliers: {
+                                      ...prev.multipliers,
+                                      [seat]: Math.max(1.1, Math.min(20, v)),
+                                    },
+                                  }));
+                                }
+                              }}
+                              className="w-11 bg-transparent text-amber-300 font-extrabold text-[12.5px] text-center focus:outline-none tabular-nums"
+                            />
+                            <span className="text-[11px] font-bold text-amber-400">×</span>
                           </div>
                         </div>
                       );
@@ -1203,7 +1308,7 @@ DATABASE_FILE=teen-patti-db.json`;
                     <button
                       type="button"
                       role="switch"
-                      aria-checked={config.showMultipliersOnBoard}
+                      aria-checked={draftConfig.showMultipliersOnBoard}
                       onClick={() =>
                         updateConfig((prev) => ({
                           ...prev,
@@ -1211,12 +1316,12 @@ DATABASE_FILE=teen-patti-db.json`;
                         }))
                       }
                       className={`w-11 h-6 rounded-full transition-colors p-0.5 cursor-pointer shrink-0 ${
-                        config.showMultipliersOnBoard ? 'bg-emerald-500' : 'bg-[#30363d]'
+                        draftConfig.showMultipliersOnBoard ? 'bg-emerald-500' : 'bg-[#30363d]'
                       }`}
                     >
                       <span
                         className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                          config.showMultipliersOnBoard
+                          draftConfig.showMultipliersOnBoard
                             ? isRtl
                               ? '-translate-x-5'
                               : 'translate-x-5'
@@ -1231,9 +1336,9 @@ DATABASE_FILE=teen-patti-db.json`;
                 <div className="rounded-xl bg-[#161b22] border border-[#2d3748] p-3 space-y-2.5">
                   <div className="text-[12.5px] font-bold text-white flex items-center justify-between">
                     <span>{t.forceWinnerTitle}</span>
-                    {config.forceNextWinner && (
+                    {draftConfig.forceNextWinner && (
                       <span className="text-[11px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                        {t.forcedActive} {config.forceNextWinner}
+                        {t.forcedActive} {draftConfig.forceNextWinner}
                       </span>
                     )}
                   </div>
@@ -1248,7 +1353,7 @@ DATABASE_FILE=teen-patti-db.json`;
                         }))
                       }
                       className={`py-2 rounded-lg text-[11.5px] font-bold border cursor-pointer transition-colors ${
-                        config.forceNextWinner === null
+                        draftConfig.forceNextWinner === null
                           ? 'bg-emerald-600 text-white border-emerald-400'
                           : 'bg-[#0d1117] text-[#94a3b8] border-[#262c36]'
                       }`}
@@ -1263,7 +1368,7 @@ DATABASE_FILE=teen-patti-db.json`;
                           updateConfig((prev) => ({ ...prev, forceNextWinner: seat }))
                         }
                         className={`py-2 rounded-lg text-[12px] font-extrabold border cursor-pointer transition-colors ${
-                          config.forceNextWinner === seat
+                          draftConfig.forceNextWinner === seat
                             ? 'bg-amber-500 text-[#0d1117] border-amber-300'
                             : 'bg-[#0d1117] text-[#cbd5e1] border-[#262c36] hover:border-amber-500/50'
                         }`}
@@ -1272,7 +1377,7 @@ DATABASE_FILE=teen-patti-db.json`;
                       </button>
                     ))}
                   </div>
-                  {config.forceNextWinner && (
+                  {draftConfig.forceNextWinner && (
                     <button
                       type="button"
                       onClick={() =>
@@ -1282,12 +1387,12 @@ DATABASE_FILE=teen-patti-db.json`;
                         }))
                       }
                       className={`w-full py-1.5 px-3 rounded-lg border text-[11.5px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer ${
-                        config.lockForcedWinner
+                        draftConfig.lockForcedWinner
                           ? 'bg-amber-500/20 border-amber-400 text-amber-200'
                           : 'bg-[#0d1117] border-[#262c36] text-[#94a3b8]'
                       }`}
                     >
-                      {config.lockForcedWinner ? (
+                      {draftConfig.lockForcedWinner ? (
                         <Lock className="w-3.5 h-3.5" />
                       ) : (
                         <Unlock className="w-3.5 h-3.5" />
@@ -1373,7 +1478,7 @@ DATABASE_FILE=teen-patti-db.json`;
                     {t.chipsTitle}
                   </div>
                   <div className="grid grid-cols-2 gap-2">
-                    {config.chipValues.map((val, idx) => (
+                    {draftConfig.chipValues.map((val, idx) => (
                       <div
                         key={idx}
                         className="rounded-lg bg-[#0d1117] border border-[#262c36] p-2 flex items-center justify-between gap-2"
@@ -1419,7 +1524,7 @@ DATABASE_FILE=teen-patti-db.json`;
                     <div className="flex justify-between text-[11.5px]">
                       <span className="text-[#94a3b8]">{t.bettingSeconds}</span>
                       <span className="font-bold text-white tabular-nums">
-                        {config.roundDuration}s
+                        {draftConfig.roundDuration}s
                       </span>
                     </div>
                     <input
@@ -1427,7 +1532,7 @@ DATABASE_FILE=teen-patti-db.json`;
                       min={5}
                       max={60}
                       step={1}
-                      value={config.roundDuration}
+                      value={draftConfig.roundDuration}
                       onChange={(e) =>
                         updateConfig((prev) => ({
                           ...prev,
@@ -1441,7 +1546,7 @@ DATABASE_FILE=teen-patti-db.json`;
                     <div className="flex justify-between text-[11.5px]">
                       <span className="text-[#94a3b8]">{t.revealSeconds}</span>
                       <span className="font-bold text-white tabular-nums">
-                        {config.revealDuration}s
+                        {draftConfig.revealDuration}s
                       </span>
                     </div>
                     <input
@@ -1449,7 +1554,7 @@ DATABASE_FILE=teen-patti-db.json`;
                       min={2}
                       max={10}
                       step={0.5}
-                      value={config.revealDuration}
+                      value={draftConfig.revealDuration}
                       onChange={(e) =>
                         updateConfig((prev) => ({
                           ...prev,
@@ -1474,7 +1579,7 @@ DATABASE_FILE=teen-patti-db.json`;
                     <button
                       type="button"
                       role="switch"
-                      aria-checked={config.botsEnabled}
+                      aria-checked={draftConfig.botsEnabled}
                       onClick={() =>
                         updateConfig((prev) => ({
                           ...prev,
@@ -1482,12 +1587,12 @@ DATABASE_FILE=teen-patti-db.json`;
                         }))
                       }
                       className={`w-11 h-6 rounded-full transition-colors p-0.5 cursor-pointer shrink-0 ${
-                        config.botsEnabled ? 'bg-emerald-500' : 'bg-[#30363d]'
+                        draftConfig.botsEnabled ? 'bg-emerald-500' : 'bg-[#30363d]'
                       }`}
                     >
                       <span
                         className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                          config.botsEnabled
+                          draftConfig.botsEnabled
                             ? isRtl
                               ? '-translate-x-5'
                               : 'translate-x-5'
@@ -1496,7 +1601,7 @@ DATABASE_FILE=teen-patti-db.json`;
                       />
                     </button>
                   </div>
-                  {config.botsEnabled && (
+                  {draftConfig.botsEnabled && (
                     <div className="grid grid-cols-3 gap-1.5">
                       {(
                         [
@@ -1512,7 +1617,7 @@ DATABASE_FILE=teen-patti-db.json`;
                             updateConfig((prev) => ({ ...prev, botActivity: lvl.id }))
                           }
                           className={`py-1.5 rounded-md text-[11.5px] font-bold cursor-pointer border ${
-                            config.botActivity === lvl.id
+                            draftConfig.botActivity === lvl.id
                               ? 'bg-purple-600 text-white border-purple-400'
                               : 'bg-[#0d1117] text-[#94a3b8] border-[#262c36]'
                           }`}
@@ -1537,7 +1642,7 @@ DATABASE_FILE=teen-patti-db.json`;
                       </label>
                       <input
                         type="text"
-                        value={config.playerName}
+                        value={draftConfig.playerName}
                         onChange={(e) =>
                           updateConfig((prev) => ({
                             ...prev,
@@ -1553,7 +1658,7 @@ DATABASE_FILE=teen-patti-db.json`;
                       </label>
                       <input
                         type="text"
-                        value={config.userId}
+                        value={draftConfig.userId}
                         onChange={(e) =>
                           updateConfig((prev) => ({
                             ...prev,
@@ -1940,18 +2045,27 @@ DATABASE_FILE=teen-patti-db.json`;
             )}
           </div>
 
-          {/* ================= FOOTER ================= */}
-          <div className="px-4 py-2.5 bg-[#161b22] border-t border-[#2d3748] flex items-center justify-between gap-2 shrink-0">
-            <span className="text-[11px] text-[#94a3b8] flex items-center gap-1">
-              <Languages className="w-3.5 h-3.5" />
-              {lang === 'en' ? 'English (Default)' : 'العربية'}
-            </span>
+          {/* ================= STICKY FOOTER WITH SAVE DATA BUTTON ================= */}
+          <div className="px-3.5 py-2.5 bg-[#161b22] border-t border-[#2d3748] flex items-center justify-between gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={savingConfig}
+              onClick={handleSaveData}
+              className={`flex-1 py-2 px-3 rounded-lg text-[12.5px] font-extrabold flex items-center justify-center gap-1.5 cursor-pointer transition-all ${
+                hasUnsavedChanges
+                  ? 'bg-emerald-500 hover:bg-emerald-400 text-[#0d1117] shadow-[0_0_16px_rgba(16,185,129,0.45)]'
+                  : 'bg-emerald-600/25 hover:bg-emerald-600/35 text-emerald-300 border border-emerald-500/40'
+              }`}
+            >
+              <Save className="w-4 h-4" />
+              {savingConfig ? t.savingBtn : t.saveDataBtn}
+            </button>
             <button
               type="button"
               onClick={handleResetAllDefaults}
-              className="px-2.5 py-1.5 rounded-lg bg-[#21262d] hover:bg-[#30363d] text-[#cbd5e1] border border-[#30363d] text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+              className="px-2.5 py-2 rounded-lg bg-[#21262d] hover:bg-[#30363d] text-[#cbd5e1] border border-[#30363d] text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors shrink-0"
             >
-              <RotateCcw className="w-3 h-3" />
+              <RotateCcw className="w-3.5 h-3.5" />
               {t.resetAllDefaults}
             </button>
           </div>

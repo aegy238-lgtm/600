@@ -102,15 +102,20 @@ function loadSavedConfig(): GameControlConfig {
       parsed.forceNextWinner === 'C'
         ? parsed.forceNextWinner
         : null;
+    const globalRate =
+      typeof parsed.globalWinRate === 'number' && Number.isFinite(parsed.globalWinRate)
+        ? Math.min(100, Math.max(0, parsed.globalWinRate))
+        : DEFAULT_GAME_CONFIG.globalWinRate;
     return {
       ...DEFAULT_GAME_CONFIG,
       ...parsed,
+      globalWinRate: globalRate,
       forceNextWinner: forced,
       coinIconUrl: coinUrl,
       winRates: {
-        A: parsed.winRates?.A ?? DEFAULT_GAME_CONFIG.winRates.A,
-        B: parsed.winRates?.B ?? DEFAULT_GAME_CONFIG.winRates.B,
-        C: parsed.winRates?.C ?? DEFAULT_GAME_CONFIG.winRates.C,
+        A: globalRate,
+        B: globalRate,
+        C: globalRate,
       },
       multipliers: {
         A: parsed.multipliers?.A ?? DEFAULT_GAME_CONFIG.multipliers.A,
@@ -236,6 +241,7 @@ export default function App() {
   const userBetsRef = useRef(userBets);
   const roundNumberRef = useRef(roundNumber);
   const configRef = useRef(config);
+  const historyRef = useRef(history);
   const phaseRef = useRef(phase);
   const apiBaseRef = useRef(apiBase);
   const serverConnectedRef = useRef(serverConnected);
@@ -265,6 +271,10 @@ export default function App() {
   useEffect(() => {
     configRef.current = config;
   }, [config]);
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -420,10 +430,12 @@ export default function App() {
 
     const result = dealRoundHands({
       outcomeMode: cfg.outcomeMode,
+      globalWinRate: cfg.globalWinRate,
       winRates: cfg.winRates,
       forceWinner: cfg.forceNextWinner,
       userBets: currentBets,
       multipliers: cfg.multipliers,
+      recentWinners: historyRef.current.slice(0, 5).map((h) => h.winner),
     });
 
     if (cfg.forceNextWinner && !cfg.lockForcedWinner) {

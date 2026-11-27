@@ -159,12 +159,22 @@ function sanitizeConfigPatch(
     chipValues: [...current.chipValues] as [number, number, number, number],
   };
 
-  if (patch.winRates && typeof patch.winRates === 'object') {
+  if (patch.globalWinRate !== undefined) {
+    const rate =
+      Math.round(clampNumber(patch.globalWinRate, 0, 100, current.globalWinRate) * 10) / 10;
+    next.globalWinRate = rate;
+    next.winRates = { A: rate, B: rate, C: rate };
+  } else if (patch.winRates && typeof patch.winRates === 'object') {
     (['A', 'B', 'C'] as SeatId[]).forEach((seat) => {
       if (patch.winRates && patch.winRates[seat] !== undefined) {
-        next.winRates[seat] = Math.round(clampNumber(patch.winRates[seat], 0, 100, current.winRates[seat]) * 10) / 10;
+        next.winRates[seat] =
+          Math.round(clampNumber(patch.winRates[seat], 0, 100, current.winRates[seat]) * 10) / 10;
       }
     });
+    const avgRate =
+      Math.round(((next.winRates.A + next.winRates.B + next.winRates.C) / 3) * 10) / 10;
+    next.globalWinRate = avgRate;
+    next.winRates = { A: avgRate, B: avgRate, C: avgRate };
   }
 
   if (patch.multipliers && typeof patch.multipliers === 'object') {

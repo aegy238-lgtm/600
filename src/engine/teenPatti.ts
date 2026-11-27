@@ -59,7 +59,9 @@ export function isSafeCoinIconUrl(url: string | undefined | null): boolean {
 }
 
 export interface GameControlConfig {
-  /** Target win rate percentages / weights per seat (0..100) */
+  /** Single unified player win rate across A, B, and C (0..100). 0 = no player win. */
+  globalWinRate: number;
+  /** Legacy per-seat weights kept in sync with globalWinRate for backwards compatibility */
   winRates: Record<SeatId, number>;
   /** Independent payout multiplier per seat (e.g. 2.9x, 3x, 5x) */
   multipliers: Record<SeatId, number>;
@@ -88,10 +90,11 @@ export interface GameControlConfig {
 }
 
 export const DEFAULT_GAME_CONFIG: GameControlConfig = {
+  globalWinRate: 35,
   winRates: {
-    A: 33.3,
-    B: 33.3,
-    C: 33.4,
+    A: 35,
+    B: 35,
+    C: 35,
   },
   multipliers: {
     A: 2.9,
@@ -277,70 +280,79 @@ export function getNormalizedWinProbs(
   };
 }
 
-function pickFromSeatsWeighted(
-  seats: SeatId[],
-  winRates: Record<SeatId, number>
-): SeatId {
-  const weights = seats.map((s) =>
-    Math.max(0, Number.isFinite(winRates[s]) ? winRates[s] : 0)
-  );
-  const sum = weights.reduce((acc, w) => acc + w, 0);
-  if (sum <= 0) {
-    return seats[Math.floor(Math.random() * seats.length)];
+/**
+ * Picks a seat organically from candidates so results distribute naturally across A, B, and C
+ * with balanced rotation and realistic occasional repeats (without rigid or stuck streaks).
+ */
+function pickOrganicSeat(candidates: SeatId[], recentWinners?: SeatId[]): SeatId {
+  if (candidates.length <= 1) {
+    return candidates[0] ?? 'A';
   }
-  let roll = Math.random() * sum;
-  for (let i = 0; i < seats.length; i++) {
-    roll -= weights[i];
-    if (roll < 0) return seats[i];
+  const last0 = recentWinners?.[0];
+  const last1 = recentWinners?.[1];
+  const others = last0 ? candidates.filter((s) => s !== last0) : candidates;
+
+  if (last0 && candidates.includes(last0) && others.length > 0) {
+    // If the same seat already won twice in a row, strongly prefer rotating to another seat (85%)
+    if (last1 === last0) {
+      if (Math.random() < 0.85) {
+        return others[Math.floor(Math.random() * others.length)];
+      }
+      return last0;
+    }
+    // Natural ~30% chance to repeat the previous winner, ~70% chance to rotate to another seat
+    if (Math.random() < 0.3) {
+      return last0;
+    }
+    return others[Math.floor(Math.random() * others.length)];
   }
-  return seats[seats.length - 1];
+
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
 /**
- * Picks a winning seat using exact manual 0..100% win rates.
- * - When a player bets on 1 or 2 seats, each bet seat uses its exact configured 0..100% win rate.
- * - If all seats (or all bet seats) are set to 0%, an unbet seat wins 100% of the time (no win for player).
- * - When no bets are placed, picks proportionally by weights (or randomly if all 0%).
+ * Resolves the winning seat using a single unified 0..100% win rate across A, B, and C:
+ * - When the player bets on 1 or 2 seats: player wins with exact `globalWinRate`% probability
+ *   (distributed organically across their bet seats), and loses with `(100 - globalWinRate)`%
+ *   (distributed organically across the unbet seat(s)).
+ * - At 0%, player NEVER wins (unbet seat always wins).
+ * - At 100%, player ALWAYS wins on one of their bet seats.
+ * - When no bets are placed, winners rotate organically across A, B, and C.
  */
-function pickManualWinRateSeat(
-  winRates: Record<SeatId, number>,
-  userBets: Record<SeatId, number>
+function pickUnifiedWinRateSeat(
+  globalWinRate: number,
+  userBets: Record<SeatId, number>,
+  recentWinners?: SeatId[]
 ): SeatId {
-  const rates = getNormalizedWinProbs(winRates);
+  const rate = Math.min(100, Math.max(0, Number.isFinite(globalWinRate) ? globalWinRate : 0));
   const betSeats = ALL_SEATS.filter((s) => (userBets[s] || 0) > 0);
   const unbetSeats = ALL_SEATS.filter((s) => (userBets[s] || 0) <= 0);
 
   if (betSeats.length > 0 && unbetSeats.length > 0) {
-    const betWinSum = betSeats.reduce((acc, s) => acc + rates[s], 0);
-    if (betWinSum <= 0) {
-      // 0% manual win rate on player's chosen seat(s) -> guaranteed no win!
-      return pickFromSeatsWeighted(unbetSeats, rates);
+    if (rate <= 0) {
+      return pickOrganicSeat(unbetSeats, recentWinners);
     }
-
-    // If sum of player's bet seat win rates <= 100%, use exact percentages directly;
-    // the remaining (100 - betWinSum)% goes to an unbet seat.
-    if (betWinSum < 100) {
-      let roll = Math.random() * 100;
-      for (const s of betSeats) {
-        if (roll < rates[s]) return s;
-        roll -= rates[s];
-      }
-      return pickFromSeatsWeighted(unbetSeats, rates);
+    if (rate >= 100) {
+      return pickOrganicSeat(betSeats, recentWinners);
     }
-
-    // If betWinSum >= 100%, player is guaranteed to win on one of their bet seats proportionally
-    return pickFromSeatsWeighted(betSeats, rates);
+    const roll = Math.random() * 100;
+    if (roll < rate) {
+      return pickOrganicSeat(betSeats, recentWinners);
+    }
+    return pickOrganicSeat(unbetSeats, recentWinners);
   }
 
-  return pickFromSeatsWeighted(ALL_SEATS, rates);
+  return pickOrganicSeat(ALL_SEATS, recentWinners);
 }
 
 export interface DealOptions {
   outcomeMode: OutcomeMode;
+  globalWinRate?: number;
   winRates: Record<SeatId, number>;
   forceWinner: SeatId | null;
   userBets: Record<SeatId, number>;
   multipliers: Record<SeatId, number>;
+  recentWinners?: SeatId[];
 }
 
 /**
@@ -371,6 +383,11 @@ export function dealRoundHands(options?: DealOptions): {
     return { hands, winner };
   }
 
+  const effectiveWinRate =
+    typeof options.globalWinRate === 'number' && Number.isFinite(options.globalWinRate)
+      ? options.globalWinRate
+      : Math.round(((options.winRates.A + options.winRates.B + options.winRates.C) / 3) * 10) / 10;
+
   // Determine target winning seat based on dashboard rules
   let targetWinner: SeatId;
 
@@ -386,20 +403,28 @@ export function dealRoundHands(options?: DealOptions): {
     const bestSeats = liabilities
       .filter((l) => l.liability === minLiability)
       .map((l) => l.seat);
-    targetWinner = bestSeats[Math.floor(Math.random() * bestSeats.length)];
+    targetWinner = pickOrganicSeat(bestSeats, options.recentWinners);
   } else if (options.outcomeMode === 'highest_bet') {
-    // Player-friendly mode: seat with highest user bet wins (fallback to manual rates if no bet)
+    // Player-friendly mode: seat with highest user bet wins (fallback to organic rotation if no bet)
     const totalBet = options.userBets.A + options.userBets.B + options.userBets.C;
     if (totalBet > 0) {
       const maxBet = Math.max(options.userBets.A, options.userBets.B, options.userBets.C);
       const topSeats = ALL_SEATS.filter((s) => options.userBets[s] === maxBet);
-      targetWinner = topSeats[Math.floor(Math.random() * topSeats.length)];
+      targetWinner = pickOrganicSeat(topSeats, options.recentWinners);
     } else {
-      targetWinner = pickManualWinRateSeat(options.winRates, options.userBets);
+      targetWinner = pickUnifiedWinRateSeat(
+        effectiveWinRate,
+        options.userBets,
+        options.recentWinners
+      );
     }
   } else {
-    // Manual win rate mode (0%..100% per seat)
-    targetWinner = pickManualWinRateSeat(options.winRates, options.userBets);
+    // Unified Win Rate mode (0%..100% across A, B, and C with organic rotation)
+    targetWinner = pickUnifiedWinRateSeat(
+      effectiveWinRate,
+      options.userBets,
+      options.recentWinners
+    );
   }
 
   // Sort the 3 genuinely dealt hands strongest -> weakest and assign strongest to targetWinner

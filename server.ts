@@ -356,12 +356,18 @@ async function startServer() {
     }
 
     const cfg = db.getConfig();
+    const recentWinners = db
+      .getHistory()
+      .slice(0, 5)
+      .map((item) => item.winner);
     const dealt = dealRoundHands({
       outcomeMode: cfg.outcomeMode,
+      globalWinRate: cfg.globalWinRate,
       winRates: cfg.winRates,
       forceWinner: cfg.forceNextWinner,
       userBets: bets,
       multipliers: cfg.multipliers,
+      recentWinners,
     });
 
     const winningSeat = dealt.winner;
