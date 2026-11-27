@@ -35,6 +35,28 @@ export interface RoundHistoryItem {
 export type OutcomeMode = 'weighted' | 'fair' | 'lowest_bet' | 'highest_bet';
 export type BotActivityLevel = 'low' | 'medium' | 'high';
 
+export const DEFAULT_COIN_ICON = '/assets/hd/icon-pearl.png';
+
+/**
+ * Validates that a dynamic coin icon URL uses only safe relative asset/API paths,
+ * http(s) URLs, or local blob previews (blocks javascript:, data:, vbscript:, etc.).
+ */
+export function isSafeCoinIconUrl(url: string | undefined | null): boolean {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (trimmed.length === 0 || trimmed.length > 512) return false;
+  if (trimmed.startsWith('/assets/') || trimmed.startsWith('/api/assets/')) {
+    return !trimmed.includes('..');
+  }
+  if (trimmed.startsWith('blob:')) return true;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 export interface GameControlConfig {
   /** Target win rate percentages / weights per seat (0..100) */
   winRates: Record<SeatId, number>;
@@ -60,6 +82,8 @@ export interface GameControlConfig {
   /** Editable player profile displayed in footer */
   playerName: string;
   userId: string;
+  /** Custom coin icon URL (defaults to pearl shell icon, replaceable via Dashboard upload) */
+  coinIconUrl: string;
 }
 
 export const DEFAULT_GAME_CONFIG: GameControlConfig = {
@@ -84,6 +108,7 @@ export const DEFAULT_GAME_CONFIG: GameControlConfig = {
   botActivity: 'medium',
   playerName: 'mr jack',
   userId: '21027209',
+  coinIconUrl: DEFAULT_COIN_ICON,
 };
 
 export const SUIT_SYMBOL: Record<Suit, string> = {

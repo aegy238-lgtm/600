@@ -5,6 +5,7 @@ import { formatCoins } from '../engine/teenPatti';
 interface TopUpModalProps {
   open: boolean;
   balance: number;
+  coinIconUrl: string;
   onAddCoins: (amount: number) => void;
   onClose: () => void;
 }
@@ -19,6 +20,7 @@ const PACKAGES = [
 export const TopUpModal: React.FC<TopUpModalProps> = ({
   open,
   balance,
+  coinIconUrl,
   onAddCoins,
   onClose,
 }) => {
@@ -39,8 +41,8 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({
         <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-b from-[#f0ca78] to-[#dca94b] border-b border-[#b9852f]">
           <div className="flex items-center gap-2">
             <img
-              src="/assets/hd/icon-pearl.png"
-              alt="Pearl coins"
+              src={coinIconUrl}
+              alt="Coins"
               referrerPolicy="no-referrer"
               className="w-6 h-6 object-contain"
             />
@@ -78,7 +80,7 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({
               >
                 <div className="flex items-center gap-1.5">
                   <img
-                    src="/assets/hd/icon-pearl.png"
+                    src={coinIconUrl}
                     alt=""
                     referrerPolicy="no-referrer"
                     className="w-5 h-5 object-contain"

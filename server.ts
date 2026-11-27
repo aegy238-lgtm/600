@@ -1,60 +1,101 @@
+import 'dotenv/config';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import express from 'express';
-import type { NextFunction, Request, Response } from 'express';
-import 'dotenv/config';
-import { db } from './src/server/db.ts';
-import type { BetOption } from './src/server/db.ts';
+import express, { NextFunction, Request, Response } from 'express';
+import { createServer as createViteServer } from 'vite';
+import { dealRoundHands, SeatId } from './src/engine/teenPatti.ts';
+import { createDatabase } from './src/server/db.ts';
 
 const PORT = Number(process.env.PORT) || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
-// Ephemeral HMAC signing secret (falls back to cryptographically strong random bytes in memory)
-const SESSION_SECRET = process.env.SESSION_SECRET?.trim() || crypto.randomBytes(32).toString('hex');
-const TOKEN_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
+// Ephemeral in-memory signing secret if SESSION_SECRET is not provided
+const SESSION_SECRET =
+  process.env.SESSION_SECRET && process.env.SESSION_SECRET.trim().length >= 16
+    ? process.env.SESSION_SECRET.trim()
+    : crypto.randomBytes(32).toString('hex');
 
-const WHEEL_SLICES: Array<{ index: number; option: BetOption }> = [
-  { index: 0, option: 'plum' },
-  { index: 1, option: 'watermelon' },
-  { index: 2, option: 'plum' },
-  { index: 3, option: 'seven' },
-  { index: 4, option: 'watermelon' },
-  { index: 5, option: 'plum' },
-  { index: 6, option: 'watermelon' },
-  { index: 7, option: 'plum' },
-  { index: 8, option: 'watermelon' },
-];
+const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const MAX_UPLOAD_BYTES = 512 * 1024; // 512 KB max for custom coin icon
+const ALLOWED_TOPUP_PACKS = new Set([10_000, 50_000, 200_000, 1_000_000]);
 
-const MULTIPLIERS: Record<BetOption, number> = {
-  watermelon: 2,
-  seven: 8,
-  plum: 2,
-};
+const db = createDatabase();
 
-// ---------------- Auth Token Helpers ----------------
+// ================= PASSWORD HASHING & VERIFICATION =================
 
-function signAdminToken(): string {
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `scrypt:${salt}:${derived}`;
+}
+
+function verifyPasswordHash(password: string, storedHash: string): boolean {
+  const parts = storedHash.split(':');
+  if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
+  const [, salt, hexKey] = parts;
+  const expectedBuf = Buffer.from(hexKey, 'hex');
+  const actualBuf = crypto.scryptSync(password, salt, 64);
+  if (expectedBuf.length !== actualBuf.length) return false;
+  return crypto.timingSafeEqual(expectedBuf, actualBuf);
+}
+
+function getEnvAdminPassword(): string | null {
+  const val = process.env.ADMIN_DASHBOARD_PASSWORD;
+  if (typeof val === 'string' && val.trim().length > 0) {
+    return val.trim();
+  }
+  return null;
+}
+
+function isAdminSetupRequired(): boolean {
+  if (getEnvAdminPassword()) return false;
+  return !db.getAdminPasswordHash();
+}
+
+function verifyAdminPassword(candidate: string): boolean {
+  const envPass = getEnvAdminPassword();
+  if (envPass) {
+    const a = Buffer.from(candidate, 'utf-8');
+    const b = Buffer.from(envPass, 'utf-8');
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  }
+  const storedHash = db.getAdminPasswordHash();
+  if (!storedHash) return false;
+  return verifyPasswordHash(candidate, storedHash);
+}
+
+// ================= HMAC BEARER TOKENS =================
+
+function issueAdminToken(): { token: string; expiresAt: number } {
+  const expiresAt = Date.now() + TOKEN_TTL_MS;
+  const nonce = crypto.randomBytes(12).toString('hex');
   const payload = Buffer.from(
-    JSON.stringify({ role: 'admin', exp: Date.now() + TOKEN_TTL_MS })
+    JSON.stringify({ role: 'admin', exp: expiresAt, nonce })
   ).toString('base64url');
-  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
-  return `${payload}.${sig}`;
+  const sig = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(payload)
+    .digest('base64url');
+  return { token: `${payload}.${sig}`, expiresAt };
 }
 
 function verifyAdminToken(token: string): boolean {
-  const parts = token.split('.');
-  if (parts.length !== 2) return false;
-  const [payload, sig] = parts;
-  if (!payload || !sig) return false;
-  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
-  const sigBuf = Buffer.from(sig);
-  const expBuf = Buffer.from(expected);
-  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-    return false;
-  }
+  const dotIdx = token.indexOf('.');
+  if (dotIdx <= 0 || dotIdx === token.length - 1) return false;
+  const payload = token.slice(0, dotIdx);
+  const sig = token.slice(dotIdx + 1);
+  const expectedSig = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(payload)
+    .digest('base64url');
+  const a = Buffer.from(sig, 'utf-8');
+  const b = Buffer.from(expectedSig, 'utf-8');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+
   try {
-    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8')) as {
       role?: string;
       exp?: number;
     };
@@ -64,95 +105,102 @@ function verifyAdminToken(token: string): boolean {
   }
 }
 
-function constantTimeStringEqual(a: string, b: string): boolean {
-  const bufA = crypto.createHash('sha256').update(a).digest();
-  const bufB = crypto.createHash('sha256').update(b).digest();
-  return crypto.timingSafeEqual(bufA, bufB);
-}
+// ================= RATE LIMITER FOR AUTH ROUTES =================
 
-function getEnvAdminPassword(): string | null {
-  const raw = process.env.ADMIN_DASHBOARD_PASSWORD?.trim();
-  return raw && raw.length > 0 ? raw : null;
-}
+const authAttempts = new Map<string, { count: number; resetAt: number }>();
+const AUTH_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_MAX_ATTEMPTS = 12;
 
-function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
-  const header = req.headers.authorization || '';
-  if (!header.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Authentication required' });
+function checkAuthRateLimit(req: Request, res: Response, next: NextFunction): void {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const entry = authAttempts.get(ip);
+  if (!entry || entry.resetAt <= now) {
+    authAttempts.set(ip, { count: 1, resetAt: now + AUTH_WINDOW_MS });
+    next();
     return;
   }
-  const token = header.slice('Bearer '.length).trim();
-  if (!verifyAdminToken(token)) {
-    res.status(401).json({ error: 'Invalid or expired admin session' });
+  if (entry.count >= AUTH_MAX_ATTEMPTS) {
+    res.status(429).json({
+      error: 'Too many authentication attempts. Please try again later.',
+    });
     return;
   }
+  entry.count += 1;
   next();
 }
 
-// ---------------- Input Sanitization Helpers ----------------
+// ================= IMAGE MAGIC-BYTE VALIDATION =================
 
-const PLAYER_ID_REGEX = /^[a-zA-Z0-9_-]{4,64}$/;
+function detectValidatedImageMime(
+  buf: Buffer
+): 'image/png' | 'image/jpeg' | 'image/webp' | null {
+  if (buf.length < 12) return null;
+
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47 &&
+    buf[4] === 0x0d &&
+    buf[5] === 0x0a &&
+    buf[6] === 0x1a &&
+    buf[7] === 0x0a
+  ) {
+    return 'image/png';
+  }
+
+  // JPEG: FF D8 FF
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return 'image/jpeg';
+  }
+
+  // WEBP: RIFF....WEBP
+  if (
+    buf.toString('ascii', 0, 4) === 'RIFF' &&
+    buf.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+
+  return null;
+}
+
+// ================= PLAYER ID VALIDATION =================
 
 function sanitizePlayerId(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
-  return PLAYER_ID_REGEX.test(trimmed) ? trimmed : null;
+  if (!/^[a-zA-Z0-9_-]{3,48}$/.test(trimmed)) return null;
+  return trimmed;
 }
 
-function sanitizePlayerName(raw: unknown): string {
-  if (typeof raw !== 'string') return 'Player';
-  const cleaned = raw.replace(/[<>]/g, '').trim().slice(0, 24);
-  return cleaned || 'Player';
+// ================= CORS ALLOWLIST =================
+
+function getAllowedOrigins(): Set<string> {
+  const raw = process.env.CORS_ORIGINS || '';
+  const list = raw
+    .split(',')
+    .map((s) => s.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+  return new Set(list);
 }
 
-function sanitizeBets(raw: unknown): Record<BetOption, number> {
-  const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  const cleanNum = (v: unknown) => {
-    const n = typeof v === 'number' ? v : Number(v);
-    if (!Number.isFinite(n) || n < 0) return 0;
-    return Math.min(100_000_000, Math.floor(n));
-  };
-  return {
-    watermelon: cleanNum(obj.watermelon),
-    seven: cleanNum(obj.seven),
-    plum: cleanNum(obj.plum),
-  };
-}
+function isOriginAllowed(req: Request, origin: string): boolean {
+  const normalized = origin.replace(/\/+$/, '');
+  const allowed = getAllowedOrigins();
+  if (allowed.has(normalized)) return true;
 
-// ---------------- CORS Configuration (Explicit Allowlist, No Wildcard on Auth) ----------------
-
-function parseAllowedOrigins(): Set<string> {
-  const set = new Set<string>();
-  const envOrigins = process.env.CORS_ORIGINS || '';
-  for (const item of envOrigins.split(',')) {
-    const clean = item.trim().replace(/\/$/, '');
-    if (clean && /^https?:\/\//i.test(clean)) {
-      set.add(clean);
-    }
-  }
-  if (process.env.APP_URL) {
-    set.add(process.env.APP_URL.trim().replace(/\/$/, ''));
-  }
-  return set;
-}
-
-function isOriginAllowed(origin: string | undefined, reqHost: string | undefined): boolean {
-  if (!origin) return true; // Same-origin non-CORS request
-  const normalized = origin.replace(/\/$/, '');
-  const allowlist = parseAllowedOrigins();
-  if (allowlist.has(normalized)) return true;
-
-  // Allow same host (HTTP/HTTPS)
-  if (reqHost) {
+  // Allow same-host origin
+  const hostHeader = (req.headers['x-forwarded-host'] || req.headers.host || '')
+    .toString()
+    .split(',')[0]
+    .trim();
+  if (hostHeader) {
     try {
       const parsed = new URL(normalized);
-      if (parsed.host === reqHost) return true;
-      if (
-        !IS_PROD &&
-        (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1')
-      ) {
-        return true;
-      }
+      if (parsed.host === hostHeader) return true;
     } catch {
       return false;
     }
@@ -160,144 +208,37 @@ function isOriginAllowed(origin: string | undefined, reqHost: string | undefined
   return false;
 }
 
-// ---------------- Controlled Win/Loss Spin Engine (0% - 100%) ----------------
-
-function resolveControlledSpin(
-  bets: Record<BetOption, number>,
-  winRatePct: number,
-  lucky77BonusChance: number
-): {
-  winningSliceIndex: number;
-  winningOption: BetOption;
-  bonusOption: BetOption | null;
-  outcome: 'win' | 'loss' | 'no_bet';
-} {
-  const totalCost = bets.watermelon + bets.seven + bets.plum;
-  const allOptions: BetOption[] = ['watermelon', 'seven', 'plum'];
-
-  if (totalCost <= 0) {
-    const slice = WHEEL_SLICES[Math.floor(Math.random() * WHEEL_SLICES.length)];
-    const bonusOption: BetOption | null =
-      slice.option === 'seven' && Math.random() * 100 < lucky77BonusChance
-        ? Math.random() < 0.5
-          ? 'watermelon'
-          : 'plum'
-        : null;
-    return {
-      winningSliceIndex: slice.index,
-      winningOption: slice.option,
-      bonusOption,
-      outcome: 'no_bet',
-    };
+function requireAdminAuth(req: Request, res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization || '';
+  if (!authHeader.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'Admin authentication required.' });
+    return;
   }
-
-  const betOptions = allOptions.filter((opt) => bets[opt] > 0);
-  const unbetOptions = allOptions.filter((opt) => bets[opt] === 0);
-
-  // Clamp winRatePct strictly to 0..100
-  const rate = Math.max(0, Math.min(100, winRatePct));
-  const shouldPlayerWin = rate === 100 ? true : rate === 0 ? false : Math.random() * 100 < rate;
-
-  let chosenOption: BetOption;
-
-  if (shouldPlayerWin) {
-    // Pick among the options the player bet on (favoring highest-return or weighted by wheel slices)
-    const matchingSlices = WHEEL_SLICES.filter((s) => betOptions.includes(s.option));
-    const slice = matchingSlices[Math.floor(Math.random() * matchingSlices.length)];
-    chosenOption = slice.option;
-    const bonusOption: BetOption | null =
-      chosenOption === 'seven' && Math.random() * 100 < lucky77BonusChance
-        ? Math.random() < 0.5
-          ? 'watermelon'
-          : 'plum'
-        : null;
-    return {
-      winningSliceIndex: slice.index,
-      winningOption: chosenOption,
-      bonusOption,
-      outcome: 'win',
-    };
-  } else {
-    // Player loses: pick an option the player did NOT bet on (or lowest payout option if all 3 bet)
-    if (unbetOptions.length > 0) {
-      const losingSlices = WHEEL_SLICES.filter((s) => unbetOptions.includes(s.option));
-      const slice = losingSlices[Math.floor(Math.random() * losingSlices.length)];
-      return {
-        winningSliceIndex: slice.index,
-        winningOption: slice.option,
-        bonusOption: null,
-        outcome: 'loss',
-      };
-    }
-
-    // Player hedged all 3 boxes: pick whichever option returns the smallest payout
-    const sortedByPayout = [...allOptions].sort(
-      (a, b) => bets[a] * MULTIPLIERS[a] - bets[b] * MULTIPLIERS[b]
-    );
-    chosenOption = sortedByPayout[0];
-    const slices = WHEEL_SLICES.filter((s) => s.option === chosenOption);
-    const slice = slices[Math.floor(Math.random() * slices.length)];
-    const payout = bets[chosenOption] * MULTIPLIERS[chosenOption];
-    return {
-      winningSliceIndex: slice.index,
-      winningOption: chosenOption,
-      bonusOption: null,
-      outcome: payout >= totalCost ? 'win' : 'loss',
-    };
+  const token = authHeader.slice(7).trim();
+  if (!verifyAdminToken(token)) {
+    res.status(401).json({ error: 'Invalid or expired admin session.' });
+    return;
   }
+  next();
 }
-
-// ---------------- Express App & Routes ----------------
 
 async function startServer() {
   const app = express();
-  app.set('trust proxy', true);
-  app.use(express.json({ limit: '64kb' }));
 
-  // Basic security headers for API responses
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '1mb' }));
+
+  // Security headers
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     next();
   });
 
-  // In-memory brute-force rate limiter for admin auth routes
-  const authAttempts = new Map<string, { count: number; resetAt: number }>();
-  const AUTH_WINDOW_MS = 15 * 60 * 1000;
-  const AUTH_MAX_ATTEMPTS = 12;
-
-  const checkAdminRateLimit = (req: Request, res: Response): boolean => {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const now = Date.now();
-    const record = authAttempts.get(ip);
-    if (record && record.resetAt > now && record.count >= AUTH_MAX_ATTEMPTS) {
-      res.status(429).json({ error: 'Too many login attempts. Please try again later.' });
-      return false;
-    }
-    return true;
-  };
-
-  const recordFailedAdminAttempt = (req: Request) => {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const now = Date.now();
-    const record = authAttempts.get(ip);
-    if (!record || record.resetAt <= now) {
-      authAttempts.set(ip, { count: 1, resetAt: now + AUTH_WINDOW_MS });
-    } else {
-      record.count += 1;
-    }
-  };
-
-  const clearAdminAttempts = (req: Request) => {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    authAttempts.delete(ip);
-  };
-
-  // Scoped CORS middleware for external standalone dashboard support
+  // Scoped CORS for /api/* (supports external standalone Admin Dashboard URL via CORS_ORIGINS)
   app.use('/api', (req, res, next) => {
     const origin = req.headers.origin;
-    const reqHost = req.headers['x-forwarded-host']?.toString() || req.headers.host;
-    if (origin && isOriginAllowed(origin, reqHost)) {
+    if (origin && isOriginAllowed(req, origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -310,351 +251,311 @@ async function startServer() {
     next();
   });
 
-  // ---- Public Game API ----
+  // ================= PUBLIC GAME API =================
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, timestamp: Date.now() });
+    res.json({
+      ok: true,
+      game: 'Teen Patti Royal',
+      database: 'JsonFileTeenPattiDatabase',
+      serverTime: new Date().toISOString(),
+    });
   });
 
   app.get('/api/config', (_req, res) => {
     res.json({
-      settings: db.getSettings(),
+      config: db.getConfig(),
       currentRoundNumber: db.getCurrentRoundNumber(),
-      history: db.getGlobalHistory(),
+      history: db.getHistory(),
+      stats: db.getStats(),
     });
+  });
+
+  app.get('/api/assets/coin-icon', (_req, res) => {
+    const iconFile = db.getUploadedCoinIconPath();
+    if (!iconFile) {
+      res.redirect(302, '/assets/hd/icon-pearl.png');
+      return;
+    }
+    res.setHeader('Content-Type', iconFile.mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    fs.createReadStream(iconFile.filePath).pipe(res);
   });
 
   app.post('/api/players/heartbeat', (req, res) => {
     const playerId = sanitizePlayerId(req.body?.playerId);
     if (!playerId) {
-      res.status(400).json({ error: 'Invalid playerId' });
+      res.status(400).json({ error: 'Valid playerId is required.' });
       return;
     }
-    const name = sanitizePlayerName(req.body?.name);
-    const existing = db.getPlayer(playerId);
-    // Server owns balance after initial player creation; new players start at default 100,000 coins
-    const authoritativeBalance = existing ? existing.balance : 100000;
-
-    const player = db.upsertPlayerHeartbeat({ id: playerId, name, balance: authoritativeBalance });
+    const name = typeof req.body?.name === 'string' ? req.body.name : undefined;
+    const player = db.upsertPlayerHeartbeat(playerId, name);
     res.json({
       player,
-      settings: db.getSettings(),
+      config: db.getConfig(),
+      currentRoundNumber: db.getCurrentRoundNumber(),
+      history: db.getHistory(),
+      stats: db.getStats(),
     });
+  });
+
+  app.post('/api/players/topup', (req, res) => {
+    const playerId = sanitizePlayerId(req.body?.playerId);
+    const amount = Number(req.body?.amount);
+    if (!playerId || !ALLOWED_TOPUP_PACKS.has(amount)) {
+      res.status(400).json({ error: 'Invalid playerId or top-up package amount.' });
+      return;
+    }
+    const player = db.topUpPlayer(playerId, amount);
+    res.json({ player });
   });
 
   app.post('/api/players/reset', (req, res) => {
     const playerId = sanitizePlayerId(req.body?.playerId);
     if (!playerId) {
-      res.status(400).json({ error: 'Invalid playerId' });
+      res.status(400).json({ error: 'Valid playerId is required.' });
       return;
     }
-    const name = sanitizePlayerName(req.body?.name);
-    const player = db.upsertPlayerHeartbeat({
-      id: playerId,
-      name,
-      balance: 100000,
-    });
-    res.json({ player });
-  });
-
-  const ALLOWED_REFILL_PACKS = new Set([10000, 100000, 500000, 1000000]);
-
-  app.post('/api/players/refill', (req, res) => {
-    const playerId = sanitizePlayerId(req.body?.playerId);
-    if (!playerId) {
-      res.status(400).json({ error: 'Invalid playerId' });
-      return;
-    }
-    const name = sanitizePlayerName(req.body?.name);
-    const amount = Number(req.body?.amount);
-    if (!Number.isFinite(amount) || !ALLOWED_REFILL_PACKS.has(Math.floor(amount))) {
-      res.status(400).json({ error: 'Invalid refill pack amount' });
-      return;
-    }
-    const existing = db.getPlayer(playerId);
-    const currentBal = existing ? existing.balance : 100000;
-    const player = db.upsertPlayerHeartbeat({
-      id: playerId,
-      name,
-      balance: Math.min(1_000_000_000, currentBal + Math.floor(amount)),
-    });
+    const player = db.resetPlayerBalance(playerId, 100_000);
     res.json({ player });
   });
 
   app.post('/api/rounds/resolve', (req, res) => {
     const playerId = sanitizePlayerId(req.body?.playerId);
     if (!playerId) {
-      res.status(400).json({ error: 'Invalid playerId' });
-      return;
-    }
-    const playerName = sanitizePlayerName(req.body?.playerName);
-    const bets = sanitizeBets(req.body?.bets);
-    const roundNumber =
-      typeof req.body?.roundNumber === 'number' && Number.isFinite(req.body.roundNumber)
-        ? Math.max(1, Math.floor(req.body.roundNumber))
-        : db.getCurrentRoundNumber();
-
-    const settings = db.getSettings();
-    const existingPlayer = db.getPlayer(playerId);
-    const serverBalanceBeforeBet = existingPlayer ? existingPlayer.balance : 100000;
-    const totalCost = bets.watermelon + bets.seven + bets.plum;
-
-    if (totalCost > serverBalanceBeforeBet) {
-      res.status(400).json({ error: 'Insufficient balance for requested bets' });
+      res.status(400).json({ error: 'Valid playerId is required.' });
       return;
     }
 
-    const effectiveWinRate =
-      existingPlayer && existingPlayer.customWinRate !== null
-        ? existingPlayer.customWinRate
-        : settings.winRate;
+    const rawBets = req.body?.bets as Partial<Record<SeatId, unknown>> | undefined;
+    const bets: Record<SeatId, number> = {
+      A: Math.max(0, Math.floor(Number(rawBets?.A) || 0)),
+      B: Math.max(0, Math.floor(Number(rawBets?.B) || 0)),
+      C: Math.max(0, Math.floor(Number(rawBets?.C) || 0)),
+    };
 
-    const spin = resolveControlledSpin(bets, effectiveWinRate, settings.lucky77BonusChance);
+    const playerName = typeof req.body?.playerName === 'string' ? req.body.playerName : undefined;
+    const player = db.upsertPlayerHeartbeat(playerId, playerName);
+    const totalBet = bets.A + bets.B + bets.C;
 
-    let totalWin = bets[spin.winningOption] * MULTIPLIERS[spin.winningOption];
-    if (spin.bonusOption) {
-      totalWin += bets[spin.bonusOption] * MULTIPLIERS[spin.bonusOption];
+    if (!Number.isSafeInteger(totalBet) || totalBet > player.balance) {
+      res.status(400).json({
+        error: 'Insufficient balance for submitted bets.',
+        balance: player.balance,
+      });
+      return;
     }
 
-    const finalBalance = Math.min(1_000_000_000, serverBalanceBeforeBet - totalCost + totalWin);
-    const recorded = db.recordRound({
-      roundNumber,
+    const cfg = db.getConfig();
+    const dealt = dealRoundHands({
+      outcomeMode: cfg.outcomeMode,
+      winRates: cfg.winRates,
+      forceWinner: cfg.forceNextWinner,
+      userBets: bets,
+      multipliers: cfg.multipliers,
+    });
+
+    const winningSeat = dealt.winner;
+    const seatMultiplier = cfg.multipliers[winningSeat];
+    const betOnWinner = bets[winningSeat];
+    const payout = betOnWinner > 0 ? Math.round(betOnWinner * seatMultiplier) : 0;
+
+    const saved = db.recordRoundResolution({
       playerId,
       playerName,
-      bets,
-      winningOption: spin.winningOption,
-      bonusOption: spin.bonusOption,
-      winningSliceIndex: spin.winningSliceIndex,
-      totalCost,
-      totalWin,
-      netPlayerProfit: totalWin - totalCost,
-      appliedWinRate: effectiveWinRate,
-      outcome: spin.outcome,
-      newBalance: finalBalance,
+      winner: winningSeat,
+      winningRank: dealt.hands[winningSeat].rankName,
+      userBetTotal: totalBet,
+      payout,
+      multiplierUsed: seatMultiplier,
+      clearOneShotForcedWinner: true,
     });
 
     res.json({
-      winningSliceIndex: spin.winningSliceIndex,
-      winningOption: spin.winningOption,
-      bonusOption: spin.bonusOption,
-      totalCost,
-      totalWin,
-      newBalance: recorded.player.balance,
-      history: recorded.history,
-      nextRoundNumber: recorded.roundNumber,
+      hands: dealt.hands,
+      winner: winningSeat,
+      seatMultiplier,
+      totalBet,
+      payout,
+      newBalance: saved.player.balance,
+      history: saved.history,
+      nextRoundNumber: saved.nextRoundNumber,
+      stats: saved.stats,
+      config: saved.config,
     });
   });
 
-  // ---- Admin Authentication Routes ----
+  // ================= ADMIN AUTH API =================
 
   app.get('/api/admin/status', (_req, res) => {
-    const envConfigured = getEnvAdminPassword() !== null;
-    const claimed = db.getAdminPasswordHash() !== null;
     res.json({
-      needsSetup: !envConfigured && !claimed,
-      envManaged: envConfigured,
+      setupRequired: isAdminSetupRequired(),
+      envManaged: Boolean(getEnvAdminPassword()),
     });
   });
 
-  app.post('/api/admin/setup', (req, res) => {
-    if (!checkAdminRateLimit(req, res)) return;
-    if (getEnvAdminPassword() !== null) {
-      res.status(409).json({ error: 'Admin password is managed by server environment variable' });
+  app.post('/api/admin/setup', checkAuthRateLimit, (req, res) => {
+    if (!isAdminSetupRequired()) {
+      res.status(409).json({
+        error: 'Admin password is already configured. Please sign in instead.',
+      });
       return;
     }
-    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+
+    const password = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
     if (password.length < 6 || password.length > 128) {
-      res.status(400).json({ error: 'Password must be between 6 and 128 characters' });
+      res.status(400).json({
+        error: 'Password must be between 6 and 128 characters.',
+      });
       return;
     }
-    const claimed = db.claimAdminPasswordHash(password);
-    if (!claimed) {
-      recordFailedAdminAttempt(req);
-      res.status(409).json({ error: 'Admin password has already been initialized' });
-      return;
-    }
-    clearAdminAttempts(req);
-    res.json({ ok: true, token: signAdminToken() });
+
+    db.setAdminPasswordHash(hashPassword(password));
+    const { token, expiresAt } = issueAdminToken();
+    res.status(201).json({ token, expiresAt });
   });
 
-  app.post('/api/admin/login', (req, res) => {
-    if (!checkAdminRateLimit(req, res)) return;
-    const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    if (!password) {
-      res.status(400).json({ error: 'Password is required' });
+  app.post('/api/admin/login', checkAuthRateLimit, (req, res) => {
+    if (isAdminSetupRequired()) {
+      res.status(409).json({
+        error: 'Admin password has not been set up yet.',
+        setupRequired: true,
+      });
       return;
-    }
-    const envPass = getEnvAdminPassword();
-    let valid = false;
-    if (envPass !== null) {
-      valid = constantTimeStringEqual(password, envPass);
-    } else {
-      valid = db.verifyClaimedAdminPassword(password);
     }
 
-    if (!valid) {
-      recordFailedAdminAttempt(req);
-      res.status(401).json({ error: 'Invalid admin password' });
+    const password = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
+    if (!password || !verifyAdminPassword(password)) {
+      res.status(401).json({ error: 'Incorrect admin password.' });
       return;
     }
-    clearAdminAttempts(req);
-    res.json({ ok: true, token: signAdminToken() });
+
+    const { token, expiresAt } = issueAdminToken();
+    res.json({ token, expiresAt });
   });
 
-  // ---- Protected Admin Dashboard API ----
+  // ================= PROTECTED ADMIN API =================
 
   app.get('/api/admin/overview', requireAdminAuth, (_req, res) => {
-    const players = db.listPlayers();
-    const roundLogs = db.getRoundLogs(80);
-    const settings = db.getSettings();
-    const now = Date.now();
-    const onlineThresholdMs = 35_000;
-
-    let totalWagered = 0;
-    let totalWon = 0;
-    let totalWins = 0;
-    let totalLosses = 0;
-    let onlineCount = 0;
-
-    const enrichedPlayers = players.map((p) => {
-      const isOnline = now - p.lastSeenAt <= onlineThresholdMs;
-      if (isOnline) onlineCount += 1;
-      totalWagered += p.totalWagered;
-      totalWon += p.totalWon;
-      totalWins += p.winsCount;
-      totalLosses += p.lossesCount;
-      return {
-        ...p,
-        isOnline,
-      };
-    });
-
-    const totalPlayedRounds = totalWins + totalLosses;
-    const realizedWinRate =
-      totalPlayedRounds > 0 ? Number(((totalWins / totalPlayedRounds) * 100).toFixed(1)) : 0;
-
     res.json({
-      settings,
-      kpis: {
-        onlinePlayers: onlineCount,
-        totalPlayers: players.length,
-        totalWagered,
-        totalPayouts: totalWon,
-        houseProfit: totalWagered - totalWon,
-        totalPlayedRounds,
-        realizedWinRate,
-        realizedLossRate: totalPlayedRounds > 0 ? Number((100 - realizedWinRate).toFixed(1)) : 0,
-      },
-      players: enrichedPlayers,
-      roundLogs,
+      config: db.getConfig(),
+      stats: db.getStats(),
+      players: db.listPlayers(),
+      history: db.getHistory(),
       currentRoundNumber: db.getCurrentRoundNumber(),
+      uploadedCoinIcon: db.getUploadedCoinIcon(),
     });
   });
 
-  app.put('/api/admin/settings', requireAdminAuth, (req, res) => {
-    const { winRate, lucky77BonusChance, bettingDurationSec } = req.body ?? {};
-    const patch: {
-      winRate?: number;
-      lucky77BonusChance?: number;
-      bettingDurationSec?: number;
-    } = {};
+  app.put('/api/admin/config', requireAdminAuth, (req, res) => {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      res.status(400).json({ error: 'Invalid config payload.' });
+      return;
+    }
+    const updated = db.updateConfig(req.body);
+    res.json({ config: updated });
+  });
 
-    if (winRate !== undefined) {
-      const n = Number(winRate);
-      if (!Number.isFinite(n) || n < 0 || n > 100) {
-        res.status(400).json({ error: 'winRate must be a number between 0 and 100' });
-        return;
-      }
-      patch.winRate = Math.round(n);
+  app.post('/api/admin/config/reset', requireAdminAuth, (_req, res) => {
+    const config = db.resetConfig();
+    res.json({ config });
+  });
+
+  app.post('/api/admin/stats/reset', requireAdminAuth, (_req, res) => {
+    const stats = db.resetStats();
+    res.json({ stats });
+  });
+
+  app.post('/api/admin/coin-icon', requireAdminAuth, (req, res) => {
+    const dataBase64 = typeof req.body?.dataBase64 === 'string' ? req.body.dataBase64.trim() : '';
+    if (!dataBase64 || dataBase64.length > Math.ceil(MAX_UPLOAD_BYTES * 1.4)) {
+      res.status(400).json({
+        error: 'Image file is missing or exceeds the 512 KB maximum size.',
+      });
+      return;
     }
 
-    if (lucky77BonusChance !== undefined) {
-      const n = Number(lucky77BonusChance);
-      if (!Number.isFinite(n) || n < 0 || n > 100) {
-        res.status(400).json({ error: 'lucky77BonusChance must be between 0 and 100' });
-        return;
-      }
-      patch.lucky77BonusChance = Math.round(n);
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(dataBase64, 'base64');
+    } catch {
+      res.status(400).json({ error: 'Invalid base64 image payload.' });
+      return;
     }
 
-    if (bettingDurationSec !== undefined) {
-      const n = Number(bettingDurationSec);
-      if (!Number.isFinite(n) || n < 5 || n > 30) {
-        res.status(400).json({ error: 'bettingDurationSec must be between 5 and 30' });
-        return;
-      }
-      patch.bettingDurationSec = Math.round(n);
+    if (buffer.length === 0 || buffer.length > MAX_UPLOAD_BYTES) {
+      res.status(400).json({
+        error: 'Decoded image must be smaller than 512 KB.',
+      });
+      return;
     }
 
-    const updated = db.updateSettings(patch);
-    res.json({ settings: updated });
+    const detectedMime = detectValidatedImageMime(buffer);
+    if (!detectedMime) {
+      res.status(400).json({
+        error: 'Unsupported file format. Please upload a valid PNG, JPEG, or WebP image.',
+      });
+      return;
+    }
+
+    const saved = db.saveUploadedCoinIcon(buffer, detectedMime);
+    res.json({
+      coinIconUrl: saved.url,
+      config: db.getConfig(),
+      uploadedCoinIcon: saved.meta,
+    });
+  });
+
+  app.delete('/api/admin/coin-icon', requireAdminAuth, (_req, res) => {
+    const config = db.clearUploadedCoinIcon();
+    res.json({
+      coinIconUrl: config.coinIconUrl,
+      config,
+    });
   });
 
   app.put('/api/admin/players/:playerId', requireAdminAuth, (req, res) => {
     const playerId = sanitizePlayerId(req.params.playerId);
     if (!playerId) {
-      res.status(400).json({ error: 'Invalid playerId' });
+      res.status(400).json({ error: 'Invalid player ID.' });
       return;
     }
-
-    const patch: { balance?: number; customWinRate?: number | null; name?: string } = {};
+    const patch: { balance?: number; name?: string } = {};
     if (req.body?.balance !== undefined) {
       const bal = Number(req.body.balance);
-      if (!Number.isFinite(bal) || bal < 0 || bal > 1_000_000_000) {
-        res.status(400).json({ error: 'Invalid balance' });
+      if (!Number.isFinite(bal) || bal < 0) {
+        res.status(400).json({ error: 'Balance must be a non-negative number.' });
         return;
       }
       patch.balance = Math.floor(bal);
     }
-    if (req.body?.customWinRate !== undefined) {
-      if (req.body.customWinRate === null || req.body.customWinRate === '') {
-        patch.customWinRate = null;
-      } else {
-        const rate = Number(req.body.customWinRate);
-        if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
-          res.status(400).json({ error: 'customWinRate must be 0..100 or null' });
-          return;
-        }
-        patch.customWinRate = Math.round(rate);
-      }
-    }
     if (typeof req.body?.name === 'string') {
-      patch.name = sanitizePlayerName(req.body.name);
+      patch.name = req.body.name;
     }
 
-    const updated = db.updatePlayerAdmin(playerId, patch);
+    const updated = db.updatePlayer(playerId, patch);
     if (!updated) {
-      res.status(404).json({ error: 'Player not found' });
+      res.status(404).json({ error: 'Player not found.' });
       return;
     }
     res.json({ player: updated });
   });
 
-  app.delete('/api/admin/players/:playerId', requireAdminAuth, (req, res) => {
-    const playerId = sanitizePlayerId(req.params.playerId);
-    if (!playerId) {
-      res.status(400).json({ error: 'Invalid playerId' });
-      return;
-    }
-    const ok = db.deletePlayer(playerId);
-    if (!ok) {
-      res.status(404).json({ error: 'Player not found' });
-      return;
-    }
-    res.json({ ok: true });
-  });
-
   app.get('/api/admin/export', requireAdminAuth, (_req, res) => {
-    const snapshot = db.exportAll();
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', 'attachment; filename="lucky-wheel-db-export.json"');
-    res.send(JSON.stringify(snapshot, null, 2));
+    const snapshot = db.exportPublicSnapshot();
+    res.setHeader('Content-Disposition', 'attachment; filename="teen-patti-db-backup.json"');
+    res.json(snapshot);
   });
 
-  // ---- Frontend Serving (Vite Dev Middleware or Static Dist) ----
+  // Return 404 JSON for unmatched /api/* routes
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'API endpoint not found.' });
+  });
+
+  // ================= FRONTEND SERVING (VITE DEV / PROD DIST) =================
 
   if (!IS_PROD) {
-    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -664,21 +565,16 @@ async function startServer() {
     const distDir = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distDir));
     app.get('*', (_req, res) => {
-      const indexFile = path.join(distDir, 'index.html');
-      if (fs.existsSync(indexFile)) {
-        res.sendFile(indexFile);
-      } else {
-        res.status(404).send('Build output not found. Run npm run build first.');
-      }
+      res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Lucky Fruit Wheel 77 server running on http://0.0.0.0:${PORT}`);
+    console.log(`[Teen Patti Royal] Server running on http://0.0.0.0:${PORT}`);
   });
 }
 
 startServer().catch((err) => {
-  console.error('Failed to start server:', err);
+  console.error('Failed to start Teen Patti Royal server:', err);
   process.exit(1);
 });

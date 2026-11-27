@@ -12,12 +12,14 @@ export interface WinBannerData {
 interface WinResultCardProps {
   data: WinBannerData | null;
   playerName: string;
+  coinIconUrl: string;
   onDismiss: () => void;
 }
 
 export const WinResultCard: React.FC<WinResultCardProps> = ({
   data,
   playerName,
+  coinIconUrl,
   onDismiss,
 }) => {
   if (!data) return null;
@@ -116,12 +118,12 @@ export const WinResultCard: React.FC<WinResultCardProps> = ({
           <div className="grid grid-cols-2 gap-2">
             {/* Bet Amount Box */}
             <div className="rounded-lg bg-black/35 border border-[#c89236]/40 px-2.5 py-2 text-center">
-              <span className="block text-[10.5px] font-semibold text-[#e6c98a] leading-none mb-1">
-                الرهان · Bet
+              <span className="block text-[10.5px] font-semibold text-[#e6c98a] leading-none mb-1 uppercase tracking-wider">
+                Bet
               </span>
               <div className="flex items-center justify-center gap-1">
                 <img
-                  src="/assets/hd/icon-pearl.png"
+                  src={coinIconUrl}
                   alt=""
                   referrerPolicy="no-referrer"
                   draggable={false}
@@ -138,12 +140,12 @@ export const WinResultCard: React.FC<WinResultCardProps> = ({
 
             {/* Win Amount Box */}
             <div className="rounded-lg bg-gradient-to-b from-[#2f6d1b]/55 to-[#163a0b]/70 border border-[#7be850]/55 px-2.5 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]">
-              <span className="block text-[10.5px] font-semibold text-[#c5f8ae] leading-none mb-1">
-                المكسب · Win
+              <span className="block text-[10.5px] font-semibold text-[#c5f8ae] leading-none mb-1 uppercase tracking-wider">
+                Win
               </span>
               <div className="flex items-center justify-center gap-1">
                 <img
-                  src="/assets/hd/icon-pearl.png"
+                  src={coinIconUrl}
                   alt=""
                   referrerPolicy="no-referrer"
                   draggable={false}

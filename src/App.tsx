@@ -7,16 +7,27 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Sliders } from 'lucide-react';
 import {
   dealRoundHands,
+  DEFAULT_COIN_ICON,
   DEFAULT_GAME_CONFIG,
   formatCoins,
   GameControlConfig,
   HandEvaluation,
   INITIAL_HISTORY,
+  isSafeCoinIconUrl,
   RoundHistoryItem,
   SEAT_CONFIG,
   SeatId,
 } from './engine/teenPatti';
 import { soundFX } from './utils/sound';
+import {
+  getInitialApiBase,
+  requestPlayerReset,
+  requestTopUp,
+  resolveCoinIconSrc,
+  resolveServerRound,
+  sendPlayerHeartbeat,
+  ServerStats,
+} from './utils/api';
 import { PlayingCardSet } from './components/PlayingCardSet';
 import { GameHistoryModal } from './components/GameHistoryModal';
 import { RulesModal } from './components/RulesModal';
@@ -27,6 +38,7 @@ import { WinBannerData, WinResultCard } from './components/WinResultCard';
 import { HistoryClockSvg, SilverChipSvg } from './components/HdIcons';
 
 type GamePhase = 'CONNECTING' | 'BETTING' | 'FLIPPING' | 'REVEAL';
+type AppMode = 'all' | 'game' | 'admin';
 
 interface FlyingChip {
   id: number;
@@ -40,16 +52,53 @@ interface FlyingChip {
 const SEATS: SeatId[] = ['A', 'B', 'C'];
 const DEFAULT_STARTING_BALANCE = 100_000;
 const INITIAL_ROUND_NUMBER = 1511;
-const CONFIG_STORAGE_KEY = 'teen_patti_royal_config_v2';
+const CONFIG_STORAGE_KEY = 'teen_patti_royal_config_v3';
+const PLAYER_ID_STORAGE_KEY = 'teen_patti_player_id_v1';
+
+const APP_MODE: AppMode = (() => {
+  const raw = (import.meta.env.VITE_APP_MODE as string | undefined)?.trim().toLowerCase();
+  if (raw === 'admin' || raw === 'game') return raw;
+  return 'all';
+})();
+
+function isAdminRouteActive(): boolean {
+  if (APP_MODE === 'admin') return true;
+  if (APP_MODE === 'game') return false;
+  if (typeof window === 'undefined') return false;
+  return (
+    window.location.pathname === '/admin' ||
+    window.location.pathname.startsWith('/admin/') ||
+    window.location.hash === '#/admin'
+  );
+}
+
+function getOrCreatePlayerId(): string {
+  try {
+    const existing = localStorage.getItem(PLAYER_ID_STORAGE_KEY);
+    if (existing && /^[a-zA-Z0-9_-]{3,48}$/.test(existing)) {
+      return existing;
+    }
+    const generated = `tp_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
+    localStorage.setItem(PLAYER_ID_STORAGE_KEY, generated);
+    return generated;
+  } catch {
+    return `tp_${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
 
 function loadSavedConfig(): GameControlConfig {
   try {
     const raw = localStorage.getItem(CONFIG_STORAGE_KEY);
     if (!raw) return DEFAULT_GAME_CONFIG;
     const parsed = JSON.parse(raw) as Partial<GameControlConfig>;
+    const coinUrl =
+      typeof parsed.coinIconUrl === 'string' && isSafeCoinIconUrl(parsed.coinIconUrl)
+        ? parsed.coinIconUrl
+        : DEFAULT_COIN_ICON;
     return {
       ...DEFAULT_GAME_CONFIG,
       ...parsed,
+      coinIconUrl: coinUrl,
       winRates: {
         ...DEFAULT_GAME_CONFIG.winRates,
         ...(parsed.winRates || {}),
@@ -69,6 +118,13 @@ function loadSavedConfig(): GameControlConfig {
 }
 
 export default function App() {
+  const [playerId] = useState<string>(getOrCreatePlayerId);
+  const [apiBase, setApiBase] = useState<string>(getInitialApiBase);
+  const [serverConnected, setServerConnected] = useState<boolean>(false);
+  // Admin Bearer token held strictly in React memory (never persisted to localStorage/sessionStorage)
+  const [adminToken, setAdminToken] = useState<string | null>(null);
+  const [standaloneAdmin, setStandaloneAdmin] = useState<boolean>(isAdminRouteActive);
+
   const [config, setConfig] = useState<GameControlConfig>(loadSavedConfig);
 
   const [phase, setPhase] = useState<GamePhase>('CONNECTING');
@@ -90,23 +146,25 @@ export default function App() {
   });
 
   const [hands, setHands] = useState<Record<SeatId, HandEvaluation> | null>(null);
-  const [openedRankCount, setOpenedRankCount] = useState<number>(0); // 0..3 as A, B, C finish flipping
+  const [openedRankCount, setOpenedRankCount] = useState<number>(0);
   const [winner, setWinner] = useState<SeatId | null>(null);
   const [lastWinAmount, setLastWinAmount] = useState<number>(0);
   const [winBanner, setWinBanner] = useState<WinBannerData | null>(null);
   const [history, setHistory] = useState<RoundHistoryItem[]>(INITIAL_HISTORY);
 
-  // Live session analytics
-  const [stats, setStats] = useState({
+  const [stats, setStats] = useState<ServerStats>({
     roundsPlayed: 0,
     totalWagered: 0,
     totalPayouts: 0,
-    seatWins: { A: 0, B: 0, C: 0 } as Record<SeatId, number>,
+    seatWins: { A: 0, B: 0, C: 0 },
   });
 
-  // Modals & Dashboard visibility (auto-open beside game on wide desktop viewports)
   const [showDashboard, setShowDashboard] = useState<boolean>(() =>
-    typeof window !== 'undefined' ? window.innerWidth >= 1024 : false
+    APP_MODE === 'game'
+      ? false
+      : typeof window !== 'undefined'
+      ? window.innerWidth >= 1024
+      : false
   );
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [showRules, setShowRules] = useState<boolean>(false);
@@ -117,11 +175,41 @@ export default function App() {
   const [flyingChips, setFlyingChips] = useState<FlyingChip[]>([]);
 
   const selectedChipValue = config.chipValues[selectedChipIndex] ?? config.chipValues[0];
+  const activeCoinIconSrc = resolveCoinIconSrc(config.coinIconUrl, apiBase);
 
-  // Persist Dashboard settings automatically
+  // Sync browser back/forward navigation for /admin SPA route
+  useEffect(() => {
+    const handlePop = () => setStandaloneAdmin(isAdminRouteActive());
+    window.addEventListener('popstate', handlePop);
+    window.addEventListener('hashchange', handlePop);
+    return () => {
+      window.removeEventListener('popstate', handlePop);
+      window.removeEventListener('hashchange', handlePop);
+    };
+  }, []);
+
+  const navigateToStandaloneAdmin = useCallback(() => {
+    if (APP_MODE === 'game') return;
+    window.history.pushState({}, '', '/admin');
+    setStandaloneAdmin(true);
+  }, []);
+
+  const navigateBackToGame = useCallback(() => {
+    if (APP_MODE === 'admin') return;
+    window.history.pushState({}, '', '/');
+    setStandaloneAdmin(false);
+  }, []);
+
+  // Cache non-blob config locally for offline fallback
   useEffect(() => {
     try {
-      localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
+      const toStore = {
+        ...config,
+        coinIconUrl: config.coinIconUrl.startsWith('blob:')
+          ? DEFAULT_COIN_ICON
+          : config.coinIconUrl,
+      };
+      localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(toStore));
     } catch {
       // Ignore storage quota issues
     }
@@ -138,9 +226,20 @@ export default function App() {
   const userBetsRef = useRef(userBets);
   const roundNumberRef = useRef(roundNumber);
   const configRef = useRef(config);
+  const phaseRef = useRef(phase);
+  const apiBaseRef = useRef(apiBase);
+  const serverConnectedRef = useRef(serverConnected);
   const pendingOutcomeRef = useRef<{
     hands: Record<SeatId, HandEvaluation>;
     winner: SeatId;
+    fromServer?: boolean;
+    payout?: number;
+    newBalance?: number;
+    history?: RoundHistoryItem[];
+    nextRoundNumber?: number;
+    stats?: ServerStats;
+    config?: GameControlConfig;
+    seatMultiplier?: number;
   } | null>(null);
   const chipIdCounter = useRef(0);
   const toastTimeoutRef = useRef<number | null>(null);
@@ -156,6 +255,85 @@ export default function App() {
   useEffect(() => {
     configRef.current = config;
   }, [config]);
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  useEffect(() => {
+    apiBaseRef.current = apiBase;
+  }, [apiBase]);
+
+  useEffect(() => {
+    serverConnectedRef.current = serverConnected;
+  }, [serverConnected]);
+
+  const syncFromServerPayload = useCallback(
+    (payload: {
+      config?: GameControlConfig;
+      stats?: ServerStats;
+      history?: RoundHistoryItem[];
+      currentRoundNumber?: number;
+    }) => {
+      if (payload.config) {
+        setConfig((prev) => ({
+          ...prev,
+          ...payload.config,
+          coinIconUrl: isSafeCoinIconUrl(payload.config?.coinIconUrl)
+            ? payload.config!.coinIconUrl
+            : prev.coinIconUrl,
+        }));
+      }
+      if (payload.stats) {
+        setStats(payload.stats);
+      }
+      if (payload.history && payload.history.length > 0) {
+        setHistory(payload.history);
+      }
+      if (typeof payload.currentRoundNumber === 'number') {
+        setRoundNumber(payload.currentRoundNumber);
+      }
+    },
+    []
+  );
+
+  // Heartbeat with Express Server DB (syncs config, coin icon, balance, history, online presence)
+  useEffect(() => {
+    let active = true;
+    const runHeartbeat = async () => {
+      try {
+        const res = await sendPlayerHeartbeat(
+          apiBase,
+          playerId,
+          configRef.current.playerName
+        );
+        if (!active) return;
+        setServerConnected(true);
+        syncFromServerPayload({
+          config: res.config,
+          stats: res.stats,
+          history: res.history,
+          currentRoundNumber: res.currentRoundNumber,
+        });
+        // Update player balance from server DB when no un-settled bets are on the table
+        const bets = userBetsRef.current;
+        const hasPendingBets = bets.A + bets.B + bets.C > 0;
+        if (!hasPendingBets && phaseRef.current !== 'FLIPPING') {
+          setBalance(res.player.balance);
+        }
+      } catch {
+        if (!active) return;
+        setServerConnected(false);
+      }
+    };
+
+    runHeartbeat();
+    const interval = window.setInterval(runHeartbeat, 10_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [apiBase, playerId, syncFromServerPayload]);
 
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
@@ -191,10 +369,41 @@ export default function App() {
     setPhase('BETTING');
   }, []);
 
-  // Step 1: Deal all 9 cards and start sequential FLIPPING phase (all cards open bright first!)
-  const triggerFlipSequence = useCallback(() => {
+  // Step 1: Deal cards via Server DB (with seamless local fallback if offline) and start FLIPPING
+  const triggerFlipSequence = useCallback(async () => {
     const cfg = configRef.current;
-    const currentBets = userBetsRef.current;
+    const currentBets = { ...userBetsRef.current };
+
+    if (serverConnectedRef.current) {
+      try {
+        const res = await resolveServerRound(apiBaseRef.current, {
+          playerId,
+          playerName: cfg.playerName,
+          bets: currentBets,
+        });
+        pendingOutcomeRef.current = {
+          hands: res.hands,
+          winner: res.winner,
+          fromServer: true,
+          payout: res.payout,
+          newBalance: res.newBalance,
+          history: res.history,
+          nextRoundNumber: res.nextRoundNumber,
+          stats: res.stats,
+          config: res.config,
+          seatMultiplier: res.seatMultiplier,
+        };
+        setHands(res.hands);
+        setWinner(null);
+        setOpenedRankCount(0);
+        setLastWinAmount(0);
+        setWinBanner(null);
+        setPhase('FLIPPING');
+        return;
+      } catch {
+        // Fallback cleanly to local resolution if server temporarily unavailable
+      }
+    }
 
     const result = dealRoundHands({
       outcomeMode: cfg.outcomeMode,
@@ -204,21 +413,24 @@ export default function App() {
       multipliers: cfg.multipliers,
     });
 
-    // Clear one-shot forced winner unless locked
     if (cfg.forceNextWinner && !cfg.lockForcedWinner) {
       setConfig((prev) => ({ ...prev, forceNextWinner: null }));
     }
 
-    pendingOutcomeRef.current = result;
+    pendingOutcomeRef.current = {
+      hands: result.hands,
+      winner: result.winner,
+      fromServer: false,
+    };
     setHands(result.hands);
     setWinner(null);
     setOpenedRankCount(0);
     setLastWinAmount(0);
     setWinBanner(null);
     setPhase('FLIPPING');
-  }, []);
+  }, [playerId]);
 
-  // Step 2: After ALL 9 cards have opened and displayed their hand ranks, highlight the winner & settle bets!
+  // Step 2: After ALL 9 cards open, highlight winner & apply server/local settlement
   const finalizeWinnerReveal = useCallback(() => {
     const result = pendingOutcomeRef.current;
     if (!result) return;
@@ -231,31 +443,54 @@ export default function App() {
 
     const finishedRound = roundNumberRef.current;
     const roundTotalBet = currentBets.A + currentBets.B + currentBets.C;
+    const seatMultiplier = result.seatMultiplier ?? cfg.multipliers[result.winner];
     const betOnWinner = currentBets[result.winner];
-    const seatMultiplier = cfg.multipliers[result.winner];
-    const payout = betOnWinner > 0 ? Math.round(betOnWinner * seatMultiplier) : 0;
+    const payout =
+      result.fromServer && typeof result.payout === 'number'
+        ? result.payout
+        : betOnWinner > 0
+        ? Math.round(betOnWinner * seatMultiplier)
+        : 0;
 
-    setHistory((prev) => [
-      {
-        round: finishedRound,
-        winner: result.winner,
-        winningRank: result.hands[result.winner].rankName,
-        userBetTotal: roundTotalBet,
-        userPayout: payout,
-        multiplierUsed: seatMultiplier,
-      },
-      ...prev.slice(0, 49),
-    ]);
+    if (result.fromServer) {
+      if (result.history) setHistory(result.history);
+      if (result.stats) setStats(result.stats);
+      if (result.config) {
+        setConfig((prev) => ({
+          ...prev,
+          ...result.config,
+        }));
+      }
+      if (typeof result.newBalance === 'number') {
+        setBalance(result.newBalance);
+      }
+    } else {
+      setHistory((prev) => [
+        {
+          round: finishedRound,
+          winner: result.winner,
+          winningRank: result.hands[result.winner].rankName,
+          userBetTotal: roundTotalBet,
+          userPayout: payout,
+          multiplierUsed: seatMultiplier,
+        },
+        ...prev.slice(0, 49),
+      ]);
 
-    setStats((prev) => ({
-      roundsPlayed: prev.roundsPlayed + 1,
-      totalWagered: prev.totalWagered + roundTotalBet,
-      totalPayouts: prev.totalPayouts + payout,
-      seatWins: {
-        ...prev.seatWins,
-        [result.winner]: prev.seatWins[result.winner] + 1,
-      },
-    }));
+      setStats((prev) => ({
+        roundsPlayed: prev.roundsPlayed + 1,
+        totalWagered: prev.totalWagered + roundTotalBet,
+        totalPayouts: prev.totalPayouts + payout,
+        seatWins: {
+          ...prev.seatWins,
+          [result.winner]: prev.seatWins[result.winner] + 1,
+        },
+      }));
+
+      if (payout > 0) {
+        setBalance((b) => b + payout);
+      }
+    }
 
     if (payout > 0) {
       setLastWinAmount(payout);
@@ -265,7 +500,6 @@ export default function App() {
         betAmount: roundTotalBet,
         winAmount: payout,
       });
-      setBalance((b) => b + payout);
       soundFX.playWin();
     } else {
       setLastWinAmount(0);
@@ -274,24 +508,24 @@ export default function App() {
     }
   }, []);
 
-  // Phase 1: Initial Connecting splash (matching Screenshot 4)
+  // Phase 1: Initial Connecting splash
   useEffect(() => {
-    if (phase !== 'CONNECTING') return;
+    if (standaloneAdmin || phase !== 'CONNECTING') return;
     const t = window.setTimeout(() => {
       startNewBettingRound(roundNumberRef.current, configRef.current.roundDuration);
     }, 1050);
     return () => window.clearTimeout(t);
-  }, [phase, startNewBettingRound]);
+  }, [phase, standaloneAdmin, startNewBettingRound]);
 
-  // Phase 2: Betting countdown + simulated live table players betting into pots
+  // Phase 2: Betting countdown + simulated live table players
   useEffect(() => {
-    if (phase !== 'BETTING') return;
+    if (standaloneAdmin || phase !== 'BETTING') return;
 
     const countdownInterval = window.setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
           window.clearInterval(countdownInterval);
-          triggerFlipSequence();
+          void triggerFlipSequence();
           return 0;
         }
         if (prev <= 6) {
@@ -332,19 +566,17 @@ export default function App() {
         window.clearInterval(potSimInterval);
       }
     };
-  }, [phase, config.botsEnabled, config.botActivity, triggerFlipSequence]);
+  }, [phase, standaloneAdmin, config.botsEnabled, config.botActivity, triggerFlipSequence]);
 
-  // Phase 2.5: Sequential Card Opening (Seat A -> Seat B -> Seat C all open bright BEFORE winner highlight!)
+  // Phase 2.5: Sequential Card Opening (Seat A -> B -> C)
   useEffect(() => {
-    if (phase !== 'FLIPPING') return;
+    if (standaloneAdmin || phase !== 'FLIPPING') return;
 
     const timers: number[] = [];
 
-    // Seat A opens at 0ms
     soundFX.playCardFlip();
     timers.push(window.setTimeout(() => setOpenedRankCount(1), 360));
 
-    // Seat B opens at 360ms
     timers.push(
       window.setTimeout(() => {
         soundFX.playCardFlip();
@@ -352,7 +584,6 @@ export default function App() {
     );
     timers.push(window.setTimeout(() => setOpenedRankCount(2), 720));
 
-    // Seat C opens at 720ms
     timers.push(
       window.setTimeout(() => {
         soundFX.playCardFlip();
@@ -360,7 +591,6 @@ export default function App() {
     );
     timers.push(window.setTimeout(() => setOpenedRankCount(3), 1080));
 
-    // Pause briefly with all 9 cards open and fully bright, THEN highlight the winning seat!
     timers.push(
       window.setTimeout(() => {
         finalizeWinnerReveal();
@@ -370,19 +600,18 @@ export default function App() {
     return () => {
       timers.forEach((id) => window.clearTimeout(id));
     };
-  }, [phase, finalizeWinnerReveal]);
+  }, [phase, standaloneAdmin, finalizeWinnerReveal]);
 
   // Phase 3: Reveal duration -> auto start next round
   useEffect(() => {
-    if (phase !== 'REVEAL') return;
+    if (standaloneAdmin || phase !== 'REVEAL') return;
     const t = window.setTimeout(() => {
-      startNewBettingRound(
-        roundNumberRef.current + 1,
-        configRef.current.roundDuration
-      );
+      const nextNum =
+        pendingOutcomeRef.current?.nextRoundNumber ?? roundNumberRef.current + 1;
+      startNewBettingRound(nextNum, configRef.current.roundDuration);
     }, config.revealDuration * 1000);
     return () => window.clearTimeout(t);
-  }, [phase, config.revealDuration, startNewBettingRound]);
+  }, [phase, standaloneAdmin, config.revealDuration, startNewBettingRound]);
 
   // Spawn animated HD silver chip flying from bottom selector into target seat
   const spawnFlyingChip = useCallback((seat: SeatId, chipIdx: number, chipVal: number) => {
@@ -453,12 +682,22 @@ export default function App() {
   const handleRevealNow = () => {
     if (phase === 'BETTING') {
       soundFX.playChipSelect();
-      triggerFlipSequence();
+      void triggerFlipSequence();
     }
   };
 
-  const handleAddCoins = (amount: number) => {
+  const handleAddCoins = async (amount: number) => {
     soundFX.playCoinTopUp();
+    if (serverConnected) {
+      try {
+        const res = await requestTopUp(apiBase, playerId, amount);
+        setBalance(res.player.balance);
+        showToast(`Added +${formatCoins(amount)} coins!`);
+        return;
+      } catch {
+        // fallback below
+      }
+    }
     setBalance((b) => b + amount);
     showToast(`Added +${formatCoins(amount)} coins!`);
   };
@@ -474,7 +713,17 @@ export default function App() {
     setPhase('CONNECTING');
   };
 
-  const handleResetSession = () => {
+  const handleResetSession = async () => {
+    if (serverConnected) {
+      try {
+        const res = await requestPlayerReset(apiBase, playerId);
+        setBalance(res.player.balance);
+        setPhase('CONNECTING');
+        return;
+      } catch {
+        // fallback below
+      }
+    }
     setBalance(DEFAULT_STARTING_BALANCE);
     setHistory(INITIAL_HISTORY);
     setRoundNumber(INITIAL_ROUND_NUMBER);
@@ -489,9 +738,75 @@ export default function App() {
   };
 
   const handleResetDefaults = () => {
-    setConfig(DEFAULT_GAME_CONFIG);
-    showToast('تمت استعادة الإعدادات الافتراضية');
+    setConfig((prev) => ({
+      ...DEFAULT_GAME_CONFIG,
+      coinIconUrl: prev.coinIconUrl,
+    }));
+    showToast('Default settings restored');
   };
+
+  const handleConfigUpdate = useCallback(
+    (updater: (prev: GameControlConfig) => GameControlConfig) => {
+      setConfig((prev) => {
+        const next = updater(prev);
+        if (
+          phaseRef.current === 'BETTING' &&
+          next.roundDuration !== prev.roundDuration &&
+          timeLeft > next.roundDuration
+        ) {
+          setTimeLeft(next.roundDuration);
+        }
+        return next;
+      });
+    },
+    [timeLeft]
+  );
+
+  // ================= STANDALONE EXTERNAL /admin FULL-SCREEN MODE =================
+  if (standaloneAdmin) {
+    return (
+      <main
+        className="min-h-dvh w-full flex items-center justify-center p-2 sm:p-4 overflow-hidden"
+        style={{
+          background:
+            'radial-gradient(ellipse at center, #1e293b 0%, #0f172a 65%, #070b14 100%)',
+        }}
+      >
+        <AdminDashboard
+          open
+          standalone
+          config={config}
+          balance={balance}
+          roundNumber={roundNumber}
+          phase={phase}
+          timeLeft={timeLeft}
+          userBets={userBets}
+          pots={pots}
+          stats={stats}
+          history={history}
+          apiBase={apiBase}
+          serverConnected={serverConnected}
+          adminToken={adminToken}
+          onAdminTokenChange={setAdminToken}
+          onApiBaseChange={setApiBase}
+          onChangeConfig={handleConfigUpdate}
+          onSyncServerState={syncFromServerPayload}
+          onSetBalance={setBalance}
+          onRevealNow={handleRevealNow}
+          onResetStats={() =>
+            setStats({
+              roundsPlayed: 0,
+              totalWagered: 0,
+              totalPayouts: 0,
+              seatWins: { A: 0, B: 0, C: 0 },
+            })
+          }
+          onResetDefaults={handleResetDefaults}
+          onBackToGame={APP_MODE === 'admin' ? undefined : navigateBackToGame}
+        />
+      </main>
+    );
+  }
 
   const visibleResults = history.slice(0, 10);
 
@@ -503,55 +818,71 @@ export default function App() {
           'radial-gradient(ellipse at center, #3b2814 0%, #1c1209 70%, #0e0904 100%)',
       }}
     >
-      {/* Floating Control Dashboard Toggle Button (when Dashboard is collapsed) */}
-      {!showDashboard && (
+      {/* Floating Admin Dashboard Toggle Button (desktop only; mobile uses header icon & menu) */}
+      {APP_MODE !== 'game' && !showDashboard && (
         <button
           type="button"
           onClick={() => {
             soundFX.playChipSelect();
             setShowDashboard(true);
           }}
-          className="fixed top-3 right-3 z-50 inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-[#0f172a]/95 hover:bg-[#1e293b] text-amber-300 border border-amber-500/40 shadow-xl text-[12.5px] font-bold cursor-pointer transition-all active:scale-95 whitespace-nowrap"
+          className="hidden lg:inline-flex fixed top-3 right-3 z-50 items-center gap-2 px-3.5 py-2 rounded-lg bg-[#0f172a]/95 hover:bg-[#1e293b] text-amber-300 border border-amber-500/40 shadow-xl text-[12.5px] font-bold cursor-pointer transition-all active:scale-95 whitespace-nowrap"
         >
           <Sliders className="w-4 h-4" />
-          لوحة التحكم
+          Admin Dashboard
         </button>
       )}
 
       {/* ================= TEEN PATTI ROYAL GAME BOARD ================= */}
       <div
         ref={boardRef}
-        className="relative w-full max-w-[465px] max-h-[100dvh] sm:max-h-[95dvh] aspect-[1080/1289] overflow-hidden shadow-[0_24px_70px_rgba(0,0,0,0.75)] sm:rounded-[6px] shrink-0"
+        className="relative w-full h-[100dvh] max-w-[480px] sm:h-auto sm:max-w-[465px] sm:max-h-[95dvh] sm:aspect-[1080/1289] overflow-hidden shadow-[0_24px_70px_rgba(0,0,0,0.75)] sm:rounded-[6px] shrink-0"
         style={{
           background:
             'radial-gradient(ellipse 90% 55% at 50% 34%, #f9e8be 0%, #eccb83 58%, #dfa94e 100%)',
         }}
       >
         {/* Inner Playable Board aligned precisely inside the ornate carved gold frame */}
-        <div className="relative w-full h-full flex flex-col justify-between pt-[3.3%] pb-[3.3%] px-[5.2%]">
+        <div className="relative w-full h-full flex flex-col justify-between pt-[3.6%] pb-[3.6%] px-[5.4%] sm:pt-[3.3%] sm:pb-[3.3%] sm:px-[5.2%]">
           {/* ================= TOP HEADER BAR ================= */}
-          <header className="relative flex items-center justify-between px-2.5 pt-2 pb-1 z-20 shrink-0">
-            {/* Left Round Pill */}
-            <div className="px-3 py-[2px] rounded-full border border-[#8e6731] bg-[#eed498]/55 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4)]">
-              <span className="text-[13px] sm:text-[15px] font-semibold text-[#1e1408] tracking-tight tabular-nums whitespace-nowrap">
-                round: {roundNumber}
-              </span>
+          <header className="relative flex items-center justify-between px-2 pt-1.5 pb-1 z-20 shrink-0 gap-1.5">
+            {/* Left Round Pill + Mobile Dashboard Quick Button */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <div className="px-2.5 sm:px-3 py-[2px] rounded-full border border-[#8e6731] bg-[#eed498]/55 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4)]">
+                <span className="text-[12px] sm:text-[15px] font-semibold text-[#1e1408] tracking-tight tabular-nums whitespace-nowrap">
+                  round: {roundNumber}
+                </span>
+              </div>
+              {APP_MODE !== 'game' && !showDashboard && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundFX.playChipSelect();
+                    setShowDashboard(true);
+                  }}
+                  aria-label="Open Admin Dashboard"
+                  title="Admin Dashboard"
+                  className="lg:hidden w-7 h-7 rounded-full border border-[#8e6731] bg-[#5a3b11]/90 text-[#ffe699] flex items-center justify-center shadow-sm active:scale-95 cursor-pointer shrink-0"
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
 
             {/* Center Title Pill */}
             <div
-              className="px-6 sm:px-8 py-[2px] rounded-full border border-[#8c642d] shadow-[0_1px_3px_rgba(92,58,12,0.22)]"
+              className="px-4 sm:px-8 py-[2px] rounded-full border border-[#8c642d] shadow-[0_1px_3px_rgba(92,58,12,0.22)] shrink-0"
               style={{
                 background:
                   'linear-gradient(180deg, #fff6de 0%, #f1da9f 55%, #d6ad5c 100%)',
               }}
             >
-              <h1 className="text-[13px] sm:text-[15px] font-semibold text-[#5a3b11] tracking-tight whitespace-nowrap">
+              <h1 className="text-[12.5px] sm:text-[15px] font-semibold text-[#5a3b11] tracking-tight whitespace-nowrap">
                 Teen Patti
               </h1>
             </div>
 
-            {/* Right Hanging Close / Options Tag (Ultra-crisp HD sprite) */}
+            {/* Right Hanging Close / Options Tag */}
             <button
               type="button"
               onClick={() => {
@@ -559,7 +890,7 @@ export default function App() {
                 setShowMenu(true);
               }}
               aria-label="Table Options"
-              className="relative -mt-2 -mr-1 w-[38px] h-[42px] sm:w-[42px] sm:h-[46px] flex items-center justify-center cursor-pointer transition-transform hover:scale-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-[#7c4d12]"
+              className="relative -mt-1.5 -mr-0.5 w-[35px] h-[39px] sm:-mt-2 sm:-mr-1 sm:w-[42px] sm:h-[46px] flex items-center justify-center cursor-pointer transition-transform hover:scale-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-[#7c4d12] shrink-0"
             >
               <img
                 src="/assets/hd/btn-close.png"
@@ -607,7 +938,7 @@ export default function App() {
           {/* ================= 3 HD ROYAL THRONES + LEFT RULES TAB ================= */}
           <section
             aria-label="Royal Thrones"
-            className="relative grid grid-cols-3 gap-2.5 sm:gap-3 px-2.5 items-end flex-1 min-h-0 py-1 z-10"
+            className="relative grid grid-cols-3 grid-rows-[minmax(0,1fr)] gap-2 sm:gap-3 pl-5 pr-2 sm:pl-6 sm:pr-2.5 items-center flex-[1.5] min-h-[120px] sm:min-h-[128px] py-1.5 z-10 overflow-hidden"
           >
             {/* Left Vertical "Rules" Tab */}
             <button
@@ -617,13 +948,13 @@ export default function App() {
                 setShowRules(true);
               }}
               aria-label="Open Teen Patti Rules"
-              className="absolute left-0 top-[26%] z-30 py-2.5 px-[5px] sm:px-[6px] rounded-r-[4px] border-y border-r border-[#a67a32] shadow-[1px_2px_4px_rgba(74,44,8,0.28)] cursor-pointer transition-all hover:brightness-105 active:scale-95"
+              className="absolute left-0 top-1/2 -translate-y-1/2 z-30 py-2 px-[4px] sm:px-[5px] rounded-r-[4px] border-y border-r border-[#a67a32] shadow-[1px_2px_4px_rgba(74,44,8,0.28)] cursor-pointer transition-all hover:brightness-105 active:scale-95"
               style={{
                 background: 'linear-gradient(90deg, #bd8d3d 0%, #d4a654 100%)',
               }}
             >
               <span
-                className="block text-[11px] sm:text-[12.5px] font-bold text-[#52330d] tracking-wide leading-none"
+                className="block text-[10.5px] sm:text-[12px] font-bold text-[#52330d] tracking-wide leading-none"
                 style={{ writingMode: 'vertical-rl' }}
               >
                 Rules
@@ -641,7 +972,7 @@ export default function App() {
                   type="button"
                   onClick={() => handlePlaceBet(seat)}
                   aria-label={`Bet on Throne ${seat}`}
-                  className={`relative h-full max-h-[126px] flex items-center justify-center cursor-pointer transition-all duration-200 focus-visible:outline-2 focus-visible:outline-[#7c4d12] rounded-lg ${
+                  className={`relative w-full h-full min-h-0 max-h-[170px] sm:max-h-[140px] flex items-center justify-center p-0.5 cursor-pointer transition-all duration-200 focus-visible:outline-2 focus-visible:outline-[#7c4d12] rounded-lg ${
                     phase === 'BETTING' ? 'hover:-translate-y-1 active:scale-95' : ''
                   } ${isWinSeat ? 'scale-105 z-20' : ''}`}
                 >
@@ -650,7 +981,7 @@ export default function App() {
                     alt={`Royal Throne ${seat}`}
                     referrerPolicy="no-referrer"
                     draggable={false}
-                    className={`h-[90%] max-h-[116px] w-auto object-contain transition-all duration-300 ${
+                    className={`w-full h-full object-contain object-center transition-all duration-300 ${
                       isDimmed
                         ? 'brightness-50 opacity-75'
                         : isWinSeat
@@ -702,7 +1033,7 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Top Gold Header Band with A / B / C (+ optional live multiplier from Dashboard) */}
+                  {/* Top Gold Header Band */}
                   <div
                     className={`py-2 sm:py-2.5 flex items-center justify-center gap-1.5 transition-colors ${
                       isWinSeat
@@ -757,18 +1088,18 @@ export default function App() {
               Result:
             </span>
 
-            <div className="flex-1 flex items-center justify-between gap-[3px] sm:gap-1 min-w-0">
+            <div className="flex-1 flex items-center justify-between gap-[2px] sm:gap-1 min-w-0">
               {visibleResults.map((item, idx) => (
                 <div
                   key={`${item.round}-${idx}`}
                   className="relative flex flex-col items-center justify-center shrink-0"
                 >
                   {idx === 0 && (
-                    <span className="absolute -top-[7px] left-1/2 -translate-x-1/2 text-[7.5px] sm:text-[8.5px] font-black text-[#a62d21] leading-none tracking-tighter z-10">
+                    <span className="absolute -top-[7px] left-1/2 -translate-x-1/2 text-[7px] sm:text-[8.5px] font-black text-[#a62d21] leading-none tracking-tighter z-10">
                       NEW
                     </span>
                   )}
-                  <div className="w-[21px] h-[21px] sm:w-[25px] sm:h-[25px] rounded-full bg-white shadow-[0_1px_2px_rgba(88,52,12,0.2)] flex items-center justify-center p-[2.5px]">
+                  <div className="w-[19px] h-[19px] min-[390px]:w-[22px] min-[390px]:h-[22px] sm:w-[25px] sm:h-[25px] rounded-full bg-white shadow-[0_1px_2px_rgba(88,52,12,0.2)] flex items-center justify-center p-[2px] sm:p-[2.5px]">
                     <img
                       src={SEAT_CONFIG[item.winner].throneImg}
                       alt={`Winner ${item.winner}`}
@@ -783,17 +1114,17 @@ export default function App() {
           </button>
 
           {/* ================= MIDDLE GOLD BREATHING SPACE ================= */}
-          <div className="flex-[0.62] min-h-[14px]" />
+          <div className="flex-[0.22] min-h-[8px] sm:flex-[0.42]" />
 
           {/* ================= BOTTOM PLAYER & CHIP FOOTER ================= */}
           <footer
-            className="w-full px-2.5 pt-2 pb-2 shrink-0 z-20"
+            className="w-full px-2 sm:px-2.5 pt-2 pb-2 shrink-0 z-20"
             style={{
               background: 'linear-gradient(180deg, #deb460 0%, #d2a450 100%)',
             }}
           >
             {/* Row 1: Player Avatar + Name + User ID */}
-            <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center justify-between mb-1.5 gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <img
                   src="/assets/hd/avatar-player.png"
@@ -806,23 +1137,23 @@ export default function App() {
                   {config.playerName}
                 </span>
               </div>
-              <span className="text-[12.5px] sm:text-[14.5px] font-medium text-[#f9f0dc] tabular-nums whitespace-nowrap drop-shadow-[0_1px_1px_rgba(92,58,12,0.35)]">
+              <span className="text-[12px] sm:text-[14.5px] font-medium text-[#f9f0dc] tabular-nums whitespace-nowrap drop-shadow-[0_1px_1px_rgba(92,58,12,0.35)]">
                 User ID: {config.userId}
               </span>
             </div>
 
-            {/* Row 2: HD Pearl Balance + Top Up + 4 Vector HD Silver Chips + HD History Clock */}
-            <div className="flex items-center justify-between gap-1.5">
+            {/* Row 2: Custom Coin Balance + Top Up + 4 Silver Chips + History Clock */}
+            <div className="flex items-center justify-between gap-1 sm:gap-1.5">
               {/* Balance & Top Up */}
-              <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
                 <img
-                  src="/assets/hd/icon-pearl.png"
+                  src={activeCoinIconSrc}
                   alt="Coins"
                   referrerPolicy="no-referrer"
                   draggable={false}
-                  className="w-[25px] h-[25px] sm:w-[28px] sm:h-[28px] object-contain shrink-0 drop-shadow-[0_1px_2px_rgba(0,0,0,0.22)]"
+                  className="w-[22px] h-[22px] min-[390px]:w-[25px] min-[390px]:h-[25px] sm:w-[28px] sm:h-[28px] object-contain shrink-0 drop-shadow-[0_1px_2px_rgba(0,0,0,0.22)]"
                 />
-                <span className="text-[14px] sm:text-[16px] font-extrabold text-[#ffea2e] tabular-nums drop-shadow-[0_1px_2px_rgba(110,66,0,0.65)]">
+                <span className="text-[13px] min-[390px]:text-[14px] sm:text-[16px] font-extrabold text-[#ffea2e] tabular-nums drop-shadow-[0_1px_2px_rgba(110,66,0,0.65)]">
                   {formatCoins(balance)}
                 </span>
                 <button
@@ -831,14 +1162,14 @@ export default function App() {
                     soundFX.playChipSelect();
                     setShowTopUp(true);
                   }}
-                  className="ml-0.5 text-[13px] sm:text-[14.5px] font-bold text-[#6c4814] hover:text-[#4b3009] active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                  className="ml-0.5 text-[11.5px] min-[390px]:text-[13px] sm:text-[14.5px] font-bold text-[#6c4814] hover:text-[#4b3009] active:scale-95 transition-all cursor-pointer whitespace-nowrap"
                 >
                   Top Up
                 </button>
               </div>
 
-              {/* 4 Ultra-Crisp Vector Silver Betting Chips + History Clock */}
-              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              {/* 4 Vector Silver Betting Chips + History Clock */}
+              <div className="flex items-center gap-1 min-[390px]:gap-1.5 sm:gap-2 shrink-0">
                 {config.chipValues.map((chipVal, idx) => {
                   const isSelected = selectedChipIndex === idx;
                   return (
@@ -851,7 +1182,7 @@ export default function App() {
                       onClick={() => handleSelectChip(idx)}
                       aria-label={`Select ${formatCoins(chipVal)} chip`}
                       aria-pressed={isSelected}
-                      className={`relative w-[34px] h-[34px] sm:w-[39px] sm:h-[39px] rounded-full cursor-pointer transition-all duration-150 focus-visible:outline-2 focus-visible:outline-white ${
+                      className={`relative w-[31px] h-[31px] min-[390px]:w-[35px] min-[390px]:h-[35px] sm:w-[39px] sm:h-[39px] rounded-full cursor-pointer transition-all duration-150 focus-visible:outline-2 focus-visible:outline-white ${
                         isSelected
                           ? '-translate-y-1 scale-[1.08] ring-2 ring-[#fff199] shadow-[0_4px_10px_rgba(255,230,110,0.85)]'
                           : 'opacity-95 hover:opacity-100 hover:-translate-y-0.5 active:scale-95 drop-shadow-[0_2px_3px_rgba(0,0,0,0.22)]'
@@ -862,7 +1193,6 @@ export default function App() {
                   );
                 })}
 
-                {/* Ultra-Crisp Vector History Clock Button */}
                 <button
                   type="button"
                   onClick={() => {
@@ -870,7 +1200,7 @@ export default function App() {
                     setShowHistory(true);
                   }}
                   aria-label="Open Game History"
-                  className="w-[34px] h-[34px] sm:w-[39px] sm:h-[39px] rounded-full cursor-pointer transition-transform hover:scale-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-white drop-shadow-[0_2px_3px_rgba(0,0,0,0.2)]"
+                  className="w-[31px] h-[31px] min-[390px]:w-[35px] min-[390px]:h-[35px] sm:w-[39px] sm:h-[39px] rounded-full cursor-pointer transition-transform hover:scale-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-white drop-shadow-[0_2px_3px_rgba(0,0,0,0.2)]"
                 >
                   <HistoryClockSvg />
                 </button>
@@ -928,6 +1258,7 @@ export default function App() {
           <WinResultCard
             data={winBanner}
             playerName={config.playerName}
+            coinIconUrl={activeCoinIconSrc}
             onDismiss={() => setWinBanner(null)}
           />
         )}
@@ -958,6 +1289,7 @@ export default function App() {
         <TopUpModal
           open={showTopUp}
           balance={balance}
+          coinIconUrl={activeCoinIconSrc}
           onAddCoins={handleAddCoins}
           onClose={() => setShowTopUp(false)}
         />
@@ -968,12 +1300,11 @@ export default function App() {
           roundDuration={config.roundDuration}
           onToggleSound={handleToggleSound}
           onChangeDuration={(sec) => {
-            setConfig((prev) => ({ ...prev, roundDuration: sec }));
-            if (phase === 'BETTING' && timeLeft > sec) {
-              setTimeLeft(sec);
-            }
+            handleConfigUpdate((prev) => ({ ...prev, roundDuration: sec }));
           }}
-          onOpenDashboard={() => setShowDashboard(true)}
+          onOpenDashboard={() => {
+            if (APP_MODE !== 'game') setShowDashboard(true);
+          }}
           onReconnect={handleReconnect}
           onResetSession={handleResetSession}
           onClose={() => setShowMenu(false)}
@@ -981,7 +1312,7 @@ export default function App() {
       </div>
 
       {/* ================= ADMIN CONTROL DASHBOARD ================= */}
-      {showDashboard && (
+      {APP_MODE !== 'game' && showDashboard && (
         <div className="fixed inset-0 z-50 lg:static lg:z-auto flex justify-end bg-black/60 lg:bg-transparent">
           <AdminDashboard
             open={showDashboard}
@@ -994,19 +1325,13 @@ export default function App() {
             pots={pots}
             stats={stats}
             history={history}
-            onChangeConfig={(updater) => {
-              setConfig((prev) => {
-                const next = updater(prev);
-                if (
-                  phase === 'BETTING' &&
-                  next.roundDuration !== prev.roundDuration &&
-                  timeLeft > next.roundDuration
-                ) {
-                  setTimeLeft(next.roundDuration);
-                }
-                return next;
-              });
-            }}
+            apiBase={apiBase}
+            serverConnected={serverConnected}
+            adminToken={adminToken}
+            onAdminTokenChange={setAdminToken}
+            onApiBaseChange={setApiBase}
+            onChangeConfig={handleConfigUpdate}
+            onSyncServerState={syncFromServerPayload}
             onSetBalance={setBalance}
             onRevealNow={handleRevealNow}
             onResetStats={() =>
@@ -1018,6 +1343,7 @@ export default function App() {
               })
             }
             onResetDefaults={handleResetDefaults}
+            onOpenStandaloneAdmin={navigateToStandaloneAdmin}
             onClose={() => setShowDashboard(false)}
           />
         </div>

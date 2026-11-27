@@ -63,7 +63,7 @@ export const MenuModal: React.FC<MenuModalProps> = ({
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-[#0f172a] hover:bg-[#1e293b] text-amber-300 text-[13px] font-bold cursor-pointer transition-colors"
           >
             <Sliders className="w-4 h-4" />
-            لوحة التحكم · Control Dashboard
+            Admin Dashboard
           </button>
 
           {/* Sound FX Toggle */}

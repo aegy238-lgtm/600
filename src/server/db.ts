@@ -1,16 +1,14 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-
-export type BetOption = 'watermelon' | 'seven' | 'plum';
-
-export interface GameSettings {
-  winRate: number; // 0..100 (% chance player wins when they place bets)
-  lossRate: number; // 100 - winRate
-  lucky77BonusChance: number; // 0..100 (% chance of extra fruit award when 77 hits)
-  bettingDurationSec: number; // 5..30 seconds
-  updatedAt: number;
-}
+import {
+  DEFAULT_COIN_ICON,
+  DEFAULT_GAME_CONFIG,
+  GameControlConfig,
+  INITIAL_HISTORY,
+  isSafeCoinIconUrl,
+  RoundHistoryItem,
+  SeatId,
+} from '../engine/teenPatti.ts';
 
 export interface PlayerRecord {
   id: string;
@@ -20,406 +18,590 @@ export interface PlayerRecord {
   winsCount: number;
   lossesCount: number;
   totalWagered: number;
-  totalWon: number;
-  netProfit: number;
-  winRatePct: number;
-  lossRatePct: number;
-  customWinRate: number | null; // Optional per-player override (0..100) or null to use global winRate
-  lastBetAt: number | null;
+  totalPayouts: number;
   lastSeenAt: number;
   createdAt: number;
 }
 
-export interface RoundLogRecord {
-  id: string;
-  roundNumber: number;
-  playerId: string;
-  playerName: string;
-  bets: Record<BetOption, number>;
-  winningOption: BetOption;
-  bonusOption: BetOption | null;
-  winningSliceIndex: number;
-  totalCost: number;
-  totalWin: number;
-  netPlayerProfit: number;
-  appliedWinRate: number;
-  outcome: 'win' | 'loss' | 'no_bet';
-  timestamp: number;
+export interface GlobalStats {
+  roundsPlayed: number;
+  totalWagered: number;
+  totalPayouts: number;
+  seatWins: Record<SeatId, number>;
 }
 
-export interface DatabaseSnapshot {
-  version: number;
-  settings: GameSettings;
-  adminPasswordHash: string | null; // scrypt "salt:hash" when claimed via first-run setup
-  players: Record<string, PlayerRecord>;
-  roundLogs: RoundLogRecord[];
-  globalHistory: BetOption[];
+export interface UploadedCoinIconMeta {
+  filename: string;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+  updatedAt: number;
+}
+
+export interface TeenPattiDbSchema {
+  config: GameControlConfig;
+  adminPasswordHash: string | null;
+  uploadedCoinIcon: UploadedCoinIconMeta | null;
   currentRoundNumber: number;
+  history: RoundHistoryItem[];
+  stats: GlobalStats;
+  players: Record<string, PlayerRecord>;
 }
 
-const DEFAULT_HISTORY: BetOption[] = [
-  'plum', 'watermelon', 'watermelon', 'plum', 'watermelon', 'watermelon', 'plum',
-  'plum', 'plum', 'watermelon', 'plum', 'plum', 'plum', 'watermelon',
-  'seven', 'watermelon', 'watermelon', 'seven', 'watermelon', 'watermelon', 'plum',
-  'plum', 'plum', 'watermelon', 'plum', 'plum', 'watermelon', 'seven',
-  'plum', 'plum', 'plum', 'plum', 'plum', 'plum', 'plum',
-  'plum', 'plum', 'plum', 'watermelon', 'plum', 'seven', 'watermelon',
-  'plum', 'seven', 'plum', 'plum', 'watermelon', 'seven', 'watermelon',
-];
-
-const DEFAULT_SNAPSHOT = (): DatabaseSnapshot => ({
-  version: 1,
-  settings: {
-    winRate: 45,
-    lossRate: 55,
-    lucky77BonusChance: 45,
-    bettingDurationSec: 10,
-    updatedAt: Date.now(),
-  },
-  adminPasswordHash: null,
-  players: {},
-  roundLogs: [],
-  globalHistory: [...DEFAULT_HISTORY],
-  currentRoundNumber: 228,
-});
+export interface PublicDbExport {
+  exportedAt: string;
+  config: GameControlConfig;
+  currentRoundNumber: number;
+  stats: GlobalStats;
+  history: RoundHistoryItem[];
+  players: PlayerRecord[];
+}
 
 /**
- * Clean pluggable Database Adapter interface.
- * Developers can swap this JSON file implementation with PostgreSQL / MySQL / MongoDB
- * by implementing these methods without changing any API route or UI code.
+ * Pluggable Database Interface for Teen Patti Royal.
+ * Developers can implement this interface with PostgreSQL, MySQL, MongoDB, or Prisma
+ * and swap it in server.ts without changing any REST routes or frontend UI.
  */
-export interface IGameDatabase {
-  getSettings(): GameSettings;
-  updateSettings(patch: Partial<Pick<GameSettings, 'winRate' | 'lucky77BonusChance' | 'bettingDurationSec'>>): GameSettings;
+export interface ITeenPattiDatabase {
+  getConfig(): GameControlConfig;
+  updateConfig(patch: Partial<GameControlConfig>): GameControlConfig;
+  resetConfig(): GameControlConfig;
+
   getAdminPasswordHash(): string | null;
-  claimAdminPasswordHash(plainPassword: string): boolean;
-  verifyClaimedAdminPassword(plainPassword: string): boolean;
-  upsertPlayerHeartbeat(input: { id: string; name: string; balance: number }): PlayerRecord;
+  setAdminPasswordHash(hash: string): void;
+
+  getUploadedCoinIcon(): UploadedCoinIconMeta | null;
+  saveUploadedCoinIcon(
+    buffer: Buffer,
+    mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
+  ): { meta: UploadedCoinIconMeta; url: string };
+  getUploadedCoinIconPath(): { filePath: string; mimeType: string } | null;
+  clearUploadedCoinIcon(): GameControlConfig;
+
+  getCurrentRoundNumber(): number;
+  getHistory(): RoundHistoryItem[];
+  getStats(): GlobalStats;
+  resetStats(): GlobalStats;
+
+  upsertPlayerHeartbeat(playerId: string, name?: string): PlayerRecord;
   getPlayer(playerId: string): PlayerRecord | null;
   listPlayers(): PlayerRecord[];
-  updatePlayerAdmin(playerId: string, patch: { balance?: number; customWinRate?: number | null; name?: string }): PlayerRecord | null;
-  deletePlayer(playerId: string): boolean;
-  recordRound(entry: Omit<RoundLogRecord, 'id' | 'timestamp'> & { newBalance: number }): {
-    log: RoundLogRecord;
+  updatePlayer(
+    playerId: string,
+    patch: { balance?: number; name?: string }
+  ): PlayerRecord | null;
+  topUpPlayer(playerId: string, amount: number): PlayerRecord;
+  resetPlayerBalance(playerId: string, defaultBalance: number): PlayerRecord;
+
+  recordRoundResolution(params: {
+    playerId: string;
+    playerName?: string;
+    winner: SeatId;
+    winningRank: RoundHistoryItem['winningRank'];
+    userBetTotal: number;
+    payout: number;
+    multiplierUsed: number;
+    clearOneShotForcedWinner: boolean;
+  }): {
     player: PlayerRecord;
-    history: BetOption[];
-    roundNumber: number;
+    history: RoundHistoryItem[];
+    nextRoundNumber: number;
+    stats: GlobalStats;
+    config: GameControlConfig;
   };
-  getRoundLogs(limit?: number): RoundLogRecord[];
-  getGlobalHistory(): BetOption[];
-  getCurrentRoundNumber(): number;
-  exportAll(): Omit<DatabaseSnapshot, 'adminPasswordHash'>;
+
+  exportPublicSnapshot(): PublicDbExport;
 }
 
-export function hashPasswordScrypt(password: string): string {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${derived}`;
+const DEFAULT_STARTING_BALANCE = 100_000;
+const INITIAL_ROUND_NUMBER = 1511;
+
+function createInitialDbState(): TeenPattiDbSchema {
+  return {
+    config: {
+      ...DEFAULT_GAME_CONFIG,
+      winRates: { ...DEFAULT_GAME_CONFIG.winRates },
+      multipliers: { ...DEFAULT_GAME_CONFIG.multipliers },
+      chipValues: [...DEFAULT_GAME_CONFIG.chipValues] as [number, number, number, number],
+    },
+    adminPasswordHash: null,
+    uploadedCoinIcon: null,
+    currentRoundNumber: INITIAL_ROUND_NUMBER,
+    history: [...INITIAL_HISTORY],
+    stats: {
+      roundsPlayed: 0,
+      totalWagered: 0,
+      totalPayouts: 0,
+      seatWins: { A: 0, B: 0, C: 0 },
+    },
+    players: {},
+  };
 }
 
-export function verifyPasswordScrypt(password: string, storedHash: string): boolean {
-  const parts = storedHash.split(':');
-  if (parts.length !== 2) return false;
-  const [salt, keyHex] = parts;
-  if (!salt || !keyHex) return false;
-  const derived = crypto.scryptSync(password, salt, 64);
-  const storedBuf = Buffer.from(keyHex, 'hex');
-  if (derived.length !== storedBuf.length) return false;
-  return crypto.timingSafeEqual(derived, storedBuf);
+function clampNumber(val: unknown, min: number, max: number, fallback: number): number {
+  const num = Number(val);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(max, Math.max(min, num));
 }
 
-class JsonFileGameDatabase implements IGameDatabase {
-  private readonly filePath: string;
-  private data: DatabaseSnapshot;
+function sanitizePlayerName(raw: unknown, fallback = 'Player'): string {
+  if (typeof raw !== 'string') return fallback;
+  const cleaned = raw.trim().slice(0, 32);
+  return cleaned.length > 0 ? cleaned : fallback;
+}
 
-  constructor(customRelativePath?: string) {
-    const baseDir = path.resolve(process.cwd(), 'data');
-    fs.mkdirSync(baseDir, { recursive: true });
+function sanitizeConfigPatch(
+  current: GameControlConfig,
+  patch: Partial<GameControlConfig>
+): GameControlConfig {
+  const next: GameControlConfig = {
+    ...current,
+    winRates: { ...current.winRates },
+    multipliers: { ...current.multipliers },
+    chipValues: [...current.chipValues] as [number, number, number, number],
+  };
 
-    const requested = customRelativePath ? path.basename(customRelativePath) : 'game-db.json';
-    const resolved = path.resolve(baseDir, requested);
-    if (!resolved.startsWith(baseDir + path.sep)) {
-      throw new Error('Invalid database file path outside data directory');
-    }
-    this.filePath = resolved;
-    this.data = this.loadFromDisk();
-  }
-
-  private loadFromDisk(): DatabaseSnapshot {
-    try {
-      if (fs.existsSync(this.filePath)) {
-        const raw = fs.readFileSync(this.filePath, 'utf8');
-        const parsed = JSON.parse(raw) as Partial<DatabaseSnapshot>;
-        const defaults = DEFAULT_SNAPSHOT();
-        const winRate =
-          typeof parsed.settings?.winRate === 'number'
-            ? Math.max(0, Math.min(100, Math.round(parsed.settings.winRate)))
-            : defaults.settings.winRate;
-        return {
-          version: 1,
-          settings: {
-            winRate,
-            lossRate: 100 - winRate,
-            lucky77BonusChance:
-              typeof parsed.settings?.lucky77BonusChance === 'number'
-                ? Math.max(0, Math.min(100, Math.round(parsed.settings.lucky77BonusChance)))
-                : defaults.settings.lucky77BonusChance,
-            bettingDurationSec:
-              typeof parsed.settings?.bettingDurationSec === 'number'
-                ? Math.max(5, Math.min(30, Math.round(parsed.settings.bettingDurationSec)))
-                : defaults.settings.bettingDurationSec,
-            updatedAt: parsed.settings?.updatedAt ?? Date.now(),
-          },
-          adminPasswordHash: typeof parsed.adminPasswordHash === 'string' ? parsed.adminPasswordHash : null,
-          players: parsed.players && typeof parsed.players === 'object' ? parsed.players : {},
-          roundLogs: Array.isArray(parsed.roundLogs) ? parsed.roundLogs.slice(0, 500) : [],
-          globalHistory:
-            Array.isArray(parsed.globalHistory) && parsed.globalHistory.length >= 8
-              ? parsed.globalHistory.slice(0, 49)
-              : defaults.globalHistory,
-          currentRoundNumber:
-            typeof parsed.currentRoundNumber === 'number' && parsed.currentRoundNumber >= 1
-              ? parsed.currentRoundNumber
-              : defaults.currentRoundNumber,
-        };
+  if (patch.winRates && typeof patch.winRates === 'object') {
+    (['A', 'B', 'C'] as SeatId[]).forEach((seat) => {
+      if (patch.winRates && patch.winRates[seat] !== undefined) {
+        next.winRates[seat] = Math.round(clampNumber(patch.winRates[seat], 0, 100, current.winRates[seat]) * 10) / 10;
       }
+    });
+  }
+
+  if (patch.multipliers && typeof patch.multipliers === 'object') {
+    (['A', 'B', 'C'] as SeatId[]).forEach((seat) => {
+      if (patch.multipliers && patch.multipliers[seat] !== undefined) {
+        next.multipliers[seat] = Math.round(clampNumber(patch.multipliers[seat], 1.1, 20, current.multipliers[seat]) * 10) / 10;
+      }
+    });
+  }
+
+  if (
+    patch.outcomeMode === 'weighted' ||
+    patch.outcomeMode === 'fair' ||
+    patch.outcomeMode === 'lowest_bet' ||
+    patch.outcomeMode === 'highest_bet'
+  ) {
+    next.outcomeMode = patch.outcomeMode;
+  }
+
+  if (patch.forceNextWinner === null || patch.forceNextWinner === 'A' || patch.forceNextWinner === 'B' || patch.forceNextWinner === 'C') {
+    next.forceNextWinner = patch.forceNextWinner;
+  }
+
+  if (typeof patch.lockForcedWinner === 'boolean') {
+    next.lockForcedWinner = patch.lockForcedWinner;
+  }
+
+  if (typeof patch.showMultipliersOnBoard === 'boolean') {
+    next.showMultipliersOnBoard = patch.showMultipliersOnBoard;
+  }
+
+  if (Array.isArray(patch.chipValues) && patch.chipValues.length === 4) {
+    next.chipValues = patch.chipValues.map((v, idx) =>
+      Math.round(clampNumber(v, 100, 10_000_000, current.chipValues[idx]))
+    ) as [number, number, number, number];
+  }
+
+  if (patch.roundDuration !== undefined) {
+    next.roundDuration = Math.round(clampNumber(patch.roundDuration, 5, 60, current.roundDuration));
+  }
+
+  if (patch.revealDuration !== undefined) {
+    next.revealDuration = Math.round(clampNumber(patch.revealDuration, 2, 12, current.revealDuration) * 2) / 2;
+  }
+
+  if (typeof patch.botsEnabled === 'boolean') {
+    next.botsEnabled = patch.botsEnabled;
+  }
+
+  if (patch.botActivity === 'low' || patch.botActivity === 'medium' || patch.botActivity === 'high') {
+    next.botActivity = patch.botActivity;
+  }
+
+  if (typeof patch.playerName === 'string') {
+    next.playerName = sanitizePlayerName(patch.playerName, current.playerName);
+  }
+
+  if (typeof patch.userId === 'string') {
+    const cleanedId = patch.userId.trim().slice(0, 24);
+    if (cleanedId.length > 0) next.userId = cleanedId;
+  }
+
+  if (typeof patch.coinIconUrl === 'string' && isSafeCoinIconUrl(patch.coinIconUrl)) {
+    next.coinIconUrl = patch.coinIconUrl.trim();
+  }
+
+  return next;
+}
+
+const MIME_TO_EXT: Record<'image/png' | 'image/jpeg' | 'image/webp', string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+};
+
+export class JsonFileTeenPattiDatabase implements ITeenPattiDatabase {
+  private readonly dataDir: string;
+  private readonly uploadsDir: string;
+  private readonly dbFilePath: string;
+  private state: TeenPattiDbSchema;
+
+  constructor(databaseFilename?: string) {
+    this.dataDir = path.resolve(process.cwd(), 'data');
+    this.uploadsDir = path.resolve(this.dataDir, 'uploads');
+
+    const safeName = path.basename(databaseFilename || 'teen-patti-db.json');
+    const resolvedDbPath = path.resolve(this.dataDir, safeName);
+    if (!resolvedDbPath.startsWith(this.dataDir + path.sep)) {
+      throw new Error('Invalid database file path outside data directory.');
+    }
+    this.dbFilePath = resolvedDbPath;
+
+    fs.mkdirSync(this.dataDir, { recursive: true });
+    fs.mkdirSync(this.uploadsDir, { recursive: true });
+    this.state = this.loadFromDisk();
+  }
+
+  private loadFromDisk(): TeenPattiDbSchema {
+    const fallback = createInitialDbState();
+    try {
+      if (!fs.existsSync(this.dbFilePath)) {
+        this.persist(fallback);
+        return fallback;
+      }
+      const raw = fs.readFileSync(this.dbFilePath, 'utf-8');
+      const parsed = JSON.parse(raw) as Partial<TeenPattiDbSchema>;
+      const mergedConfig = sanitizeConfigPatch(
+        fallback.config,
+        (parsed.config as Partial<GameControlConfig>) || {}
+      );
+      return {
+        config: mergedConfig,
+        adminPasswordHash:
+          typeof parsed.adminPasswordHash === 'string' && parsed.adminPasswordHash.length > 0
+            ? parsed.adminPasswordHash
+            : null,
+        uploadedCoinIcon:
+          parsed.uploadedCoinIcon &&
+          typeof parsed.uploadedCoinIcon.filename === 'string' &&
+          (parsed.uploadedCoinIcon.mimeType === 'image/png' ||
+            parsed.uploadedCoinIcon.mimeType === 'image/jpeg' ||
+            parsed.uploadedCoinIcon.mimeType === 'image/webp')
+            ? parsed.uploadedCoinIcon
+            : null,
+        currentRoundNumber:
+          typeof parsed.currentRoundNumber === 'number' && Number.isFinite(parsed.currentRoundNumber)
+            ? Math.max(1, Math.floor(parsed.currentRoundNumber))
+            : INITIAL_ROUND_NUMBER,
+        history: Array.isArray(parsed.history) && parsed.history.length > 0
+          ? parsed.history.slice(0, 50)
+          : [...INITIAL_HISTORY],
+        stats: {
+          roundsPlayed: Number(parsed.stats?.roundsPlayed) || 0,
+          totalWagered: Number(parsed.stats?.totalWagered) || 0,
+          totalPayouts: Number(parsed.stats?.totalPayouts) || 0,
+          seatWins: {
+            A: Number(parsed.stats?.seatWins?.A) || 0,
+            B: Number(parsed.stats?.seatWins?.B) || 0,
+            C: Number(parsed.stats?.seatWins?.C) || 0,
+          },
+        },
+        players:
+          parsed.players && typeof parsed.players === 'object' && !Array.isArray(parsed.players)
+            ? (parsed.players as Record<string, PlayerRecord>)
+            : {},
+      };
     } catch {
-      // Fallback to fresh snapshot if file is corrupted
+      this.persist(fallback);
+      return fallback;
     }
-    const fresh = DEFAULT_SNAPSHOT();
-    this.persist(fresh);
-    return fresh;
   }
 
-  private persist(snapshot: DatabaseSnapshot = this.data) {
-    const tmpPath = `${this.filePath}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(snapshot, null, 2), 'utf8');
-    fs.renameSync(tmpPath, this.filePath);
+  private persist(nextState: TeenPattiDbSchema = this.state): void {
+    const tmpPath = `${this.dbFilePath}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(nextState, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, this.dbFilePath);
   }
 
-  getSettings(): GameSettings {
-    return { ...this.data.settings };
+  getConfig(): GameControlConfig {
+    return {
+      ...this.state.config,
+      winRates: { ...this.state.config.winRates },
+      multipliers: { ...this.state.config.multipliers },
+      chipValues: [...this.state.config.chipValues] as [number, number, number, number],
+    };
   }
 
-  updateSettings(patch: Partial<Pick<GameSettings, 'winRate' | 'lucky77BonusChance' | 'bettingDurationSec'>>): GameSettings {
-    if (typeof patch.winRate === 'number' && Number.isFinite(patch.winRate)) {
-      const clamped = Math.max(0, Math.min(100, Math.round(patch.winRate)));
-      this.data.settings.winRate = clamped;
-      this.data.settings.lossRate = 100 - clamped;
-    }
-    if (typeof patch.lucky77BonusChance === 'number' && Number.isFinite(patch.lucky77BonusChance)) {
-      this.data.settings.lucky77BonusChance = Math.max(0, Math.min(100, Math.round(patch.lucky77BonusChance)));
-    }
-    if (typeof patch.bettingDurationSec === 'number' && Number.isFinite(patch.bettingDurationSec)) {
-      this.data.settings.bettingDurationSec = Math.max(5, Math.min(30, Math.round(patch.bettingDurationSec)));
-    }
-    this.data.settings.updatedAt = Date.now();
+  updateConfig(patch: Partial<GameControlConfig>): GameControlConfig {
+    this.state.config = sanitizeConfigPatch(this.state.config, patch);
     this.persist();
-    return this.getSettings();
+    return this.getConfig();
+  }
+
+  resetConfig(): GameControlConfig {
+    const preservedIcon = this.state.config.coinIconUrl;
+    this.state.config = {
+      ...DEFAULT_GAME_CONFIG,
+      winRates: { ...DEFAULT_GAME_CONFIG.winRates },
+      multipliers: { ...DEFAULT_GAME_CONFIG.multipliers },
+      chipValues: [...DEFAULT_GAME_CONFIG.chipValues] as [number, number, number, number],
+      coinIconUrl: preservedIcon,
+    };
+    this.persist();
+    return this.getConfig();
   }
 
   getAdminPasswordHash(): string | null {
-    return this.data.adminPasswordHash;
+    return this.state.adminPasswordHash;
   }
 
-  claimAdminPasswordHash(plainPassword: string): boolean {
-    if (this.data.adminPasswordHash !== null) {
-      return false;
-    }
-    this.data.adminPasswordHash = hashPasswordScrypt(plainPassword);
+  setAdminPasswordHash(hash: string): void {
+    this.state.adminPasswordHash = hash;
     this.persist();
-    return true;
   }
 
-  verifyClaimedAdminPassword(plainPassword: string): boolean {
-    if (!this.data.adminPasswordHash) return false;
-    return verifyPasswordScrypt(plainPassword, this.data.adminPasswordHash);
+  getUploadedCoinIcon(): UploadedCoinIconMeta | null {
+    return this.state.uploadedCoinIcon ? { ...this.state.uploadedCoinIcon } : null;
   }
 
-  upsertPlayerHeartbeat(input: { id: string; name: string; balance: number }): PlayerRecord {
+  saveUploadedCoinIcon(
+    buffer: Buffer,
+    mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
+  ): { meta: UploadedCoinIconMeta; url: string } {
+    const ext = MIME_TO_EXT[mimeType];
+    const filename = `coin-icon.${ext}`;
+    const targetPath = path.resolve(this.uploadsDir, filename);
+
+    if (!targetPath.startsWith(this.uploadsDir + path.sep)) {
+      throw new Error('Upload path outside allowed uploads directory.');
+    }
+
+    // Remove previous icon extensions to keep uploads folder clean
+    for (const oldExt of ['png', 'jpg', 'webp']) {
+      const candidate = path.resolve(this.uploadsDir, `coin-icon.${oldExt}`);
+      if (candidate.startsWith(this.uploadsDir + path.sep) && candidate !== targetPath && fs.existsSync(candidate)) {
+        try {
+          fs.unlinkSync(candidate);
+        } catch {
+          // ignore cleanup failure
+        }
+      }
+    }
+
+    fs.writeFileSync(targetPath, buffer);
+    const updatedAt = Date.now();
+    const meta: UploadedCoinIconMeta = {
+      filename,
+      mimeType,
+      updatedAt,
+    };
+    const url = `/api/assets/coin-icon?v=${updatedAt}`;
+    this.state.uploadedCoinIcon = meta;
+    this.state.config.coinIconUrl = url;
+    this.persist();
+    return { meta, url };
+  }
+
+  getUploadedCoinIconPath(): { filePath: string; mimeType: string } | null {
+    const meta = this.state.uploadedCoinIcon;
+    if (!meta) return null;
+    const safeName = path.basename(meta.filename);
+    const resolved = path.resolve(this.uploadsDir, safeName);
+    if (!resolved.startsWith(this.uploadsDir + path.sep)) return null;
+    if (!fs.existsSync(resolved)) return null;
+    return { filePath: resolved, mimeType: meta.mimeType };
+  }
+
+  clearUploadedCoinIcon(): GameControlConfig {
+    for (const oldExt of ['png', 'jpg', 'webp']) {
+      const candidate = path.resolve(this.uploadsDir, `coin-icon.${oldExt}`);
+      if (candidate.startsWith(this.uploadsDir + path.sep) && fs.existsSync(candidate)) {
+        try {
+          fs.unlinkSync(candidate);
+        } catch {
+          // ignore
+        }
+      }
+    }
+    this.state.uploadedCoinIcon = null;
+    this.state.config.coinIconUrl = DEFAULT_COIN_ICON;
+    this.persist();
+    return this.getConfig();
+  }
+
+  getCurrentRoundNumber(): number {
+    return this.state.currentRoundNumber;
+  }
+
+  getHistory(): RoundHistoryItem[] {
+    return [...this.state.history];
+  }
+
+  getStats(): GlobalStats {
+    return {
+      ...this.state.stats,
+      seatWins: { ...this.state.stats.seatWins },
+    };
+  }
+
+  resetStats(): GlobalStats {
+    this.state.stats = {
+      roundsPlayed: 0,
+      totalWagered: 0,
+      totalPayouts: 0,
+      seatWins: { A: 0, B: 0, C: 0 },
+    };
+    this.persist();
+    return this.getStats();
+  }
+
+  upsertPlayerHeartbeat(playerId: string, name?: string): PlayerRecord {
     const now = Date.now();
-    const existing = this.data.players[input.id];
+    const existing = this.state.players[playerId];
     if (existing) {
-      existing.name = input.name;
-      existing.balance = input.balance;
       existing.lastSeenAt = now;
+      if (name && name.trim().length > 0) {
+        existing.name = sanitizePlayerName(name, existing.name);
+      }
       this.persist();
       return { ...existing };
     }
 
     const created: PlayerRecord = {
-      id: input.id,
-      name: input.name,
-      balance: input.balance,
+      id: playerId,
+      name: sanitizePlayerName(name, this.state.config.playerName || 'Player'),
+      balance: DEFAULT_STARTING_BALANCE,
       totalRounds: 0,
       winsCount: 0,
       lossesCount: 0,
       totalWagered: 0,
-      totalWon: 0,
-      netProfit: 0,
-      winRatePct: 0,
-      lossRatePct: 0,
-      customWinRate: null,
-      lastBetAt: null,
+      totalPayouts: 0,
       lastSeenAt: now,
       createdAt: now,
     };
-    this.data.players[input.id] = created;
+    this.state.players[playerId] = created;
     this.persist();
     return { ...created };
   }
 
   getPlayer(playerId: string): PlayerRecord | null {
-    const p = this.data.players[playerId];
-    return p ? { ...p } : null;
+    const rec = this.state.players[playerId];
+    return rec ? { ...rec } : null;
   }
 
   listPlayers(): PlayerRecord[] {
-    return Object.values(this.data.players)
+    return Object.values(this.state.players)
       .map((p) => ({ ...p }))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
   }
 
-  updatePlayerAdmin(
+  updatePlayer(
     playerId: string,
-    patch: { balance?: number; customWinRate?: number | null; name?: string }
+    patch: { balance?: number; name?: string }
   ): PlayerRecord | null {
-    const p = this.data.players[playerId];
-    if (!p) return null;
-    if (typeof patch.balance === 'number' && Number.isFinite(patch.balance) && patch.balance >= 0) {
-      p.balance = Math.floor(patch.balance);
+    const existing = this.state.players[playerId];
+    if (!existing) return null;
+    if (patch.balance !== undefined) {
+      existing.balance = Math.round(clampNumber(patch.balance, 0, 999_999_999, existing.balance));
     }
-    if (patch.customWinRate === null) {
-      p.customWinRate = null;
-    } else if (typeof patch.customWinRate === 'number' && Number.isFinite(patch.customWinRate)) {
-      p.customWinRate = Math.max(0, Math.min(100, Math.round(patch.customWinRate)));
-    }
-    if (typeof patch.name === 'string' && patch.name.trim()) {
-      p.name = patch.name.trim().slice(0, 24);
+    if (patch.name !== undefined) {
+      existing.name = sanitizePlayerName(patch.name, existing.name);
     }
     this.persist();
-    return { ...p };
+    return { ...existing };
   }
 
-  deletePlayer(playerId: string): boolean {
-    if (!this.data.players[playerId]) return false;
-    delete this.data.players[playerId];
+  topUpPlayer(playerId: string, amount: number): PlayerRecord {
+    const player = this.upsertPlayerHeartbeat(playerId);
+    const ref = this.state.players[player.id];
+    ref.balance = Math.min(999_999_999, ref.balance + Math.max(0, Math.floor(amount)));
+    ref.lastSeenAt = Date.now();
     this.persist();
-    return true;
+    return { ...ref };
   }
 
-  recordRound(
-    entry: Omit<RoundLogRecord, 'id' | 'timestamp'> & { newBalance: number }
-  ): {
-    log: RoundLogRecord;
-    player: PlayerRecord;
-    history: BetOption[];
-    roundNumber: number;
-  } {
-    const now = Date.now();
-    const existing = this.data.players[entry.playerId] ?? {
-      id: entry.playerId,
-      name: entry.playerName,
-      balance: entry.newBalance,
-      totalRounds: 0,
-      winsCount: 0,
-      lossesCount: 0,
-      totalWagered: 0,
-      totalWon: 0,
-      netProfit: 0,
-      winRatePct: 0,
-      lossRatePct: 0,
-      customWinRate: null,
-      lastBetAt: null,
-      lastSeenAt: now,
-      createdAt: now,
-    };
+  resetPlayerBalance(playerId: string, defaultBalance: number): PlayerRecord {
+    const player = this.upsertPlayerHeartbeat(playerId);
+    const ref = this.state.players[player.id];
+    ref.balance = Math.max(0, Math.floor(defaultBalance));
+    ref.lastSeenAt = Date.now();
+    this.persist();
+    return { ...ref };
+  }
 
-    existing.name = entry.playerName;
-    existing.balance = Math.max(0, Math.floor(entry.newBalance));
-    existing.lastSeenAt = now;
+  recordRoundResolution(params: {
+    playerId: string;
+    playerName?: string;
+    winner: SeatId;
+    winningRank: RoundHistoryItem['winningRank'];
+    userBetTotal: number;
+    payout: number;
+    multiplierUsed: number;
+    clearOneShotForcedWinner: boolean;
+  }) {
+    const player = this.upsertPlayerHeartbeat(params.playerId, params.playerName);
+    const ref = this.state.players[player.id];
 
-    if (entry.totalCost > 0) {
-      existing.totalRounds += 1;
-      existing.totalWagered += entry.totalCost;
-      existing.totalWon += entry.totalWin;
-      existing.netProfit = existing.totalWon - existing.totalWagered;
-      existing.lastBetAt = now;
-      if (entry.outcome === 'win') {
-        existing.winsCount += 1;
-      } else if (entry.outcome === 'loss') {
-        existing.lossesCount += 1;
-      }
-      existing.winRatePct =
-        existing.totalRounds > 0
-          ? Number(((existing.winsCount / existing.totalRounds) * 100).toFixed(1))
-          : 0;
-      existing.lossRatePct =
-        existing.totalRounds > 0
-          ? Number(((existing.lossesCount / existing.totalRounds) * 100).toFixed(1))
-          : 0;
-    }
+    const finishedRound = this.state.currentRoundNumber;
+    const betTotal = Math.max(0, Math.floor(params.userBetTotal));
+    const payout = Math.max(0, Math.floor(params.payout));
 
-    this.data.players[entry.playerId] = existing;
-
-    const log: RoundLogRecord = {
-      id: `${entry.roundNumber}-${now}-${crypto.randomBytes(3).toString('hex')}`,
-      roundNumber: entry.roundNumber,
-      playerId: entry.playerId,
-      playerName: entry.playerName,
-      bets: entry.bets,
-      winningOption: entry.winningOption,
-      bonusOption: entry.bonusOption,
-      winningSliceIndex: entry.winningSliceIndex,
-      totalCost: entry.totalCost,
-      totalWin: entry.totalWin,
-      netPlayerProfit: entry.netPlayerProfit,
-      appliedWinRate: entry.appliedWinRate,
-      outcome: entry.outcome,
-      timestamp: now,
-    };
-
-    if (entry.totalCost > 0) {
-      this.data.roundLogs.unshift(log);
-      if (this.data.roundLogs.length > 500) {
-        this.data.roundLogs = this.data.roundLogs.slice(0, 500);
+    if (betTotal > 0) {
+      ref.balance = Math.max(0, Math.min(999_999_999, ref.balance - betTotal + payout));
+      ref.totalRounds += 1;
+      ref.totalWagered += betTotal;
+      ref.totalPayouts += payout;
+      if (payout > 0) {
+        ref.winsCount += 1;
+      } else {
+        ref.lossesCount += 1;
       }
     }
+    ref.lastSeenAt = Date.now();
 
-    this.data.globalHistory = [entry.winningOption, ...this.data.globalHistory].slice(0, 49);
-    this.data.currentRoundNumber = Math.max(this.data.currentRoundNumber + 1, entry.roundNumber + 1);
+    const item: RoundHistoryItem = {
+      round: finishedRound,
+      winner: params.winner,
+      winningRank: params.winningRank,
+      userBetTotal: betTotal,
+      userPayout: payout,
+      multiplierUsed: params.multiplierUsed,
+    };
+
+    this.state.history = [item, ...this.state.history.slice(0, 49)];
+    this.state.currentRoundNumber = finishedRound + 1;
+    this.state.stats.roundsPlayed += 1;
+    this.state.stats.totalWagered += betTotal;
+    this.state.stats.totalPayouts += payout;
+    this.state.stats.seatWins[params.winner] = (this.state.stats.seatWins[params.winner] || 0) + 1;
+
+    if (params.clearOneShotForcedWinner && this.state.config.forceNextWinner && !this.state.config.lockForcedWinner) {
+      this.state.config.forceNextWinner = null;
+    }
+
     this.persist();
 
     return {
-      log,
-      player: { ...existing },
-      history: [...this.data.globalHistory],
-      roundNumber: this.data.currentRoundNumber,
+      player: { ...ref },
+      history: this.getHistory(),
+      nextRoundNumber: this.state.currentRoundNumber,
+      stats: this.getStats(),
+      config: this.getConfig(),
     };
   }
 
-  getRoundLogs(limit = 60): RoundLogRecord[] {
-    return this.data.roundLogs.slice(0, limit);
-  }
-
-  getGlobalHistory(): BetOption[] {
-    return [...this.data.globalHistory];
-  }
-
-  getCurrentRoundNumber(): number {
-    return this.data.currentRoundNumber;
-  }
-
-  exportAll(): Omit<DatabaseSnapshot, 'adminPasswordHash'> {
+  exportPublicSnapshot(): PublicDbExport {
     return {
-      version: this.data.version,
-      settings: this.getSettings(),
-      players: { ...this.data.players },
-      roundLogs: [...this.data.roundLogs],
-      globalHistory: [...this.data.globalHistory],
-      currentRoundNumber: this.data.currentRoundNumber,
+      exportedAt: new Date().toISOString(),
+      config: this.getConfig(),
+      currentRoundNumber: this.state.currentRoundNumber,
+      stats: this.getStats(),
+      history: this.getHistory(),
+      players: this.listPlayers(),
     };
   }
 }
 
-export const db: IGameDatabase = new JsonFileGameDatabase(process.env.DATABASE_FILE);
+export function createDatabase(): ITeenPattiDatabase {
+  return new JsonFileTeenPattiDatabase(process.env.DATABASE_FILE);
+}
