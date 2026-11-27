@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, RotateCcw, Volume2, VolumeX, Check } from 'lucide-react';
+import { X, RotateCcw, Volume2, VolumeX, Check, Sliders } from 'lucide-react';
 import {
   BetOption,
   ModalType,
@@ -24,6 +24,7 @@ interface ModalsProps {
   onAddCoins: (amount: number) => void;
   onUpdateName: (name: string) => void;
   onResetSession: () => void;
+  onOpenAdmin?: () => void;
 }
 
 const HOW_TO_PLAY_RULES = [
@@ -48,6 +49,7 @@ export const GameModals: React.FC<ModalsProps> = ({
   onAddCoins,
   onUpdateName,
   onResetSession,
+  onOpenAdmin,
 }) => {
   const [nameDraft, setNameDraft] = useState(playerName);
   const [savedNotice, setSavedNotice] = useState(false);
@@ -578,6 +580,20 @@ export const GameModals: React.FC<ModalsProps> = ({
                     {isMuted ? 'Muted' : 'On'}
                   </button>
                 </div>
+
+                {onOpenAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenAdmin();
+                    }}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-amber-400/50 bg-amber-500/15 py-2.5 text-sm font-bold text-amber-200 transition hover:bg-amber-500/25 cursor-pointer"
+                  >
+                    <Sliders className="h-4 w-4" />
+                    لوحة التحكم (Admin Dashboard)
+                  </button>
+                )}
 
                 <button
                   type="button"

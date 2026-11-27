@@ -1,11 +1,11 @@
-// Synthesized Web Audio API Arcade Sound Engine (zero external audio dependencies)
+// Lightweight synthesized Web Audio API sound effects (no external audio assets needed)
 
-class SoundEngine {
+class SoundController {
   private ctx: AudioContext | null = null;
-  private muted: boolean = false;
+  public enabled = true;
 
   private ensureContext(): AudioContext | null {
-    if (this.muted) return null;
+    if (!this.enabled) return null;
     if (typeof window === 'undefined') return null;
     if (!this.ctx) {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -19,15 +19,7 @@ class SoundEngine {
     return this.ctx;
   }
 
-  public setMuted(muted: boolean) {
-    this.muted = muted;
-  }
-
-  public isMuted(): boolean {
-    return this.muted;
-  }
-
-  public playClick() {
+  public playChipSelect() {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
@@ -35,7 +27,7 @@ class SoundEngine {
     const gain = ctx.createGain();
     osc.type = 'sine';
     osc.frequency.setValueAtTime(680, now);
-    osc.frequency.exponentialRampToValueAtTime(420, now + 0.055);
+    osc.frequency.exponentialRampToValueAtTime(980, now + 0.045);
     gain.gain.setValueAtTime(0.08, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
     osc.connect(gain);
@@ -44,115 +36,98 @@ class SoundEngine {
     osc.stop(now + 0.065);
   }
 
-  public playChipSelect() {
+  public playBetPlace() {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(920, now);
-    osc.frequency.exponentialRampToValueAtTime(1280, now + 0.06);
-    gain.gain.setValueAtTime(0.1, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.075);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.08);
+    // Double metallic casino chip clink
+    [1240, 1680].forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      const t = now + idx * 0.03;
+      osc.frequency.setValueAtTime(freq, t);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.85, t + 0.07);
+      gain.gain.setValueAtTime(0.09, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.085);
+    });
   }
 
-  public playChipPlace(isPlayer = true) {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const baseFreq = isPlayer ? 1320 : 1080;
-    const vol = isPlayer ? 0.11 : 0.03;
-
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(baseFreq, now);
-    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.45, now + 0.035);
-    gain.gain.setValueAtTime(vol, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.085);
-  }
-
-  public playCountdownTick(urgent: boolean) {
+  public playTick() {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(urgent ? 880 : 560, now);
-    gain.gain.setValueAtTime(urgent ? 0.11 : 0.05, now);
+    osc.frequency.setValueAtTime(880, now);
+    gain.gain.setValueAtTime(0.045, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.045);
+  }
+
+  public playCardFlip() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(260, now);
+    osc.frequency.exponentialRampToValueAtTime(520, now + 0.08);
+    gain.gain.setValueAtTime(0.08, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start(now);
-    osc.stop(now + 0.1);
+    osc.stop(now + 0.095);
   }
 
-  public playWheelTick() {
+  public playWin() {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'square';
-    osc.frequency.setValueAtTime(1150, now);
-    osc.frequency.exponentialRampToValueAtTime(340, now + 0.025);
-    gain.gain.setValueAtTime(0.055, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.032);
-  }
-
-  public playWin(isJackpot: boolean) {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const notes = isJackpot
-      ? [523.25, 659.25, 783.99, 1046.5, 1318.5, 1567.98]
-      : [523.25, 659.25, 783.99, 1046.5];
-
-    notes.forEach((freq, idx) => {
-      const start = now + idx * 0.075;
+    const notes = [523.25, 659.25, 783.99, 1046.5];
+    notes.forEach((freq, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = isJackpot ? 'triangle' : 'sine';
-      osc.frequency.setValueAtTime(freq, start);
-      gain.gain.setValueAtTime(0.13, start);
-      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.34);
+      const t = now + i * 0.08;
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.11, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.start(start);
-      osc.stop(start + 0.36);
+      osc.start(t);
+      osc.stop(t + 0.36);
     });
   }
 
-  public playRoundEnd() {
+  public playCoinTopUp() {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(440, now);
-    osc.frequency.exponentialRampToValueAtTime(330, now + 0.22);
-    gain.gain.setValueAtTime(0.08, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.26);
+    [880, 1174.66, 1396.91].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = now + i * 0.06;
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.09, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.23);
+    });
   }
 }
 
-export const soundEngine = new SoundEngine();
+export const soundFX = new SoundController();

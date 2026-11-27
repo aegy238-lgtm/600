@@ -1,6 +1,6 @@
 {
-  "name": "Lucky Fruit Wheel 77",
-  "description": "Royal arcade 9-slice fruit wheel game featuring Watermelon, Plum, and Lucky 77 multipliers with live betting chips, round history, and winners podium.",
+  "name": "Teen Patti Royal",
+  "description": "Classic 3-seat Teen Patti card betting game with authentic royal thrones, live pots, card reveal animations, and full round history.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
