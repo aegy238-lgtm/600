@@ -23,6 +23,7 @@ import { RulesModal } from './components/RulesModal';
 import { TopUpModal } from './components/TopUpModal';
 import { MenuModal } from './components/MenuModal';
 import { AdminDashboard } from './components/AdminDashboard';
+import { WinBannerData, WinResultCard } from './components/WinResultCard';
 import { HistoryClockSvg, SilverChipSvg } from './components/HdIcons';
 
 type GamePhase = 'CONNECTING' | 'BETTING' | 'FLIPPING' | 'REVEAL';
@@ -92,6 +93,7 @@ export default function App() {
   const [openedRankCount, setOpenedRankCount] = useState<number>(0); // 0..3 as A, B, C finish flipping
   const [winner, setWinner] = useState<SeatId | null>(null);
   const [lastWinAmount, setLastWinAmount] = useState<number>(0);
+  const [winBanner, setWinBanner] = useState<WinBannerData | null>(null);
   const [history, setHistory] = useState<RoundHistoryItem[]>(INITIAL_HISTORY);
 
   // Live session analytics
@@ -173,6 +175,7 @@ export default function App() {
     setOpenedRankCount(0);
     setWinner(null);
     setLastWinAmount(0);
+    setWinBanner(null);
     setUserBets({ A: 0, B: 0, C: 0 });
     const botsOn = configRef.current.botsEnabled;
     setPots(
@@ -211,6 +214,7 @@ export default function App() {
     setWinner(null);
     setOpenedRankCount(0);
     setLastWinAmount(0);
+    setWinBanner(null);
     setPhase('FLIPPING');
   }, []);
 
@@ -255,10 +259,17 @@ export default function App() {
 
     if (payout > 0) {
       setLastWinAmount(payout);
+      setWinBanner({
+        seat: result.winner,
+        handRank: result.hands[result.winner].rankName,
+        betAmount: roundTotalBet,
+        winAmount: payout,
+      });
       setBalance((b) => b + payout);
       soundFX.playWin();
     } else {
       setLastWinAmount(0);
+      setWinBanner(null);
       soundFX.playChipSelect();
     }
   }, []);
@@ -910,6 +921,15 @@ export default function App() {
               {toastMsg}
             </div>
           </div>
+        )}
+
+        {/* ================= PLAYER WIN CELEBRATION CARD ================= */}
+        {phase === 'REVEAL' && winBanner && (
+          <WinResultCard
+            data={winBanner}
+            playerName={config.playerName}
+            onDismiss={() => setWinBanner(null)}
+          />
         )}
 
         {/* ================= ENHANCED ORNATE CARVED GOLD FRAME OVERLAY ================= */}
