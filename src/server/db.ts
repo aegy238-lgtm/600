@@ -23,6 +23,18 @@ export interface PlayerRecord {
   createdAt: number;
 }
 
+export interface LeaderboardEntry {
+  rank: number;
+  id: string;
+  name: string;
+  balance: number;
+  totalPayouts: number;
+  winsCount: number;
+  totalRounds: number;
+  winRate: number;
+  isOnline: boolean;
+}
+
 export interface GlobalStats {
   roundsPlayed: number;
   totalWagered: number;
@@ -84,6 +96,7 @@ export interface ITeenPattiDatabase {
   upsertPlayerHeartbeat(playerId: string, name?: string): PlayerRecord;
   getPlayer(playerId: string): PlayerRecord | null;
   listPlayers(): PlayerRecord[];
+  getTopPlayers(limit?: number): LeaderboardEntry[];
   updatePlayer(
     playerId: string,
     patch: { balance?: number; name?: string }
@@ -515,6 +528,35 @@ export class JsonFileTeenPattiDatabase implements ITeenPattiDatabase {
     return Object.values(this.state.players)
       .map((p) => ({ ...p }))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  }
+
+  getTopPlayers(limit = 7): LeaderboardEntry[] {
+    const safeLimit = Math.min(20, Math.max(1, Math.floor(limit) || 7));
+    const now = Date.now();
+    const ONLINE_WINDOW_MS = 30_000;
+
+    return Object.values(this.state.players)
+      .sort((a, b) => {
+        if (b.totalPayouts !== a.totalPayouts) return b.totalPayouts - a.totalPayouts;
+        if (b.winsCount !== a.winsCount) return b.winsCount - a.winsCount;
+        if (b.balance !== a.balance) return b.balance - a.balance;
+        return b.lastSeenAt - a.lastSeenAt;
+      })
+      .slice(0, safeLimit)
+      .map((p, idx) => ({
+        rank: idx + 1,
+        id: p.id,
+        name: p.name,
+        balance: p.balance,
+        totalPayouts: p.totalPayouts,
+        winsCount: p.winsCount,
+        totalRounds: p.totalRounds,
+        winRate:
+          p.totalRounds > 0
+            ? Math.round((p.winsCount / p.totalRounds) * 1000) / 10
+            : 0,
+        isOnline: now - p.lastSeenAt <= ONLINE_WINDOW_MS,
+      }));
   }
 
   updatePlayer(

@@ -271,6 +271,18 @@ async function startServer() {
     });
   });
 
+  app.get('/api/leaderboard', (req, res) => {
+    const rawLimit = Number(req.query.limit);
+    const limit = Number.isFinite(rawLimit)
+      ? Math.min(20, Math.max(1, Math.floor(rawLimit)))
+      : 7;
+    res.json({
+      leaderboard: db.getTopPlayers(limit),
+      totalPlayers: db.listPlayers().length,
+      updatedAt: Date.now(),
+    });
+  });
+
   app.get('/api/assets/coin-icon', (_req, res) => {
     const iconFile = db.getUploadedCoinIconPath();
     if (!iconFile) {

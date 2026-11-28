@@ -20,6 +20,24 @@ export interface ServerPlayerRecord {
   createdAt: number;
 }
 
+export interface LeaderboardEntry {
+  rank: number;
+  id: string;
+  name: string;
+  balance: number;
+  totalPayouts: number;
+  winsCount: number;
+  totalRounds: number;
+  winRate: number;
+  isOnline: boolean;
+}
+
+export interface LeaderboardResponse {
+  leaderboard: LeaderboardEntry[];
+  totalPlayers: number;
+  updatedAt: number;
+}
+
 export interface ServerStats {
   roundsPlayed: number;
   totalWagered: number;
@@ -155,6 +173,16 @@ async function apiFetch<T>(
 
 export function fetchServerConfig(apiBase: string): Promise<PublicConfigResponse> {
   return apiFetch<PublicConfigResponse>(apiBase, '/api/config');
+}
+
+export function fetchLeaderboard(
+  apiBase: string,
+  limit = 7
+): Promise<LeaderboardResponse> {
+  return apiFetch<LeaderboardResponse>(
+    apiBase,
+    `/api/leaderboard?limit=${encodeURIComponent(String(limit))}`
+  );
 }
 
 export function sendPlayerHeartbeat(

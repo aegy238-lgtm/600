@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Sliders } from 'lucide-react';
+import { Sliders, Trophy } from 'lucide-react';
 import {
   dealRoundHands,
   DEFAULT_COIN_ICON,
@@ -36,6 +36,7 @@ import { TopUpModal } from './components/TopUpModal';
 import { MenuModal } from './components/MenuModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { WinBannerData, WinResultCard } from './components/WinResultCard';
+import { LeaderboardModal } from './components/LeaderboardModal';
 import { HistoryClockSvg, SilverChipSvg } from './components/HdIcons';
 
 type GamePhase = 'CONNECTING' | 'BETTING' | 'FLIPPING' | 'REVEAL';
@@ -182,6 +183,7 @@ export default function App() {
       : false
   );
   const [showHistory, setShowHistory] = useState<boolean>(false);
+  const [showLeaderboard, setShowLeaderboard] = useState<boolean>(false);
   const [showRules, setShowRules] = useState<boolean>(false);
   const [showTopUp, setShowTopUp] = useState<boolean>(false);
   const [showMenu, setShowMenu] = useState<boolean>(false);
@@ -904,7 +906,7 @@ export default function App() {
 
             {/* Center Title Pill */}
             <div
-              className="px-4 sm:px-8 py-[2px] rounded-full border border-[#8c642d] shadow-[0_1px_3px_rgba(92,58,12,0.22)] shrink-0"
+              className="px-3.5 sm:px-7 py-[2px] rounded-full border border-[#8c642d] shadow-[0_1px_3px_rgba(92,58,12,0.22)] shrink-0"
               style={{
                 background:
                   'linear-gradient(180deg, #fff6de 0%, #f1da9f 55%, #d6ad5c 100%)',
@@ -915,24 +917,43 @@ export default function App() {
               </h1>
             </div>
 
-            {/* Right Hanging Close / Options Tag */}
-            <button
-              type="button"
-              onClick={() => {
-                soundFX.playChipSelect();
-                setShowMenu(true);
-              }}
-              aria-label="Table Options"
-              className="relative -mt-1.5 -mr-0.5 w-[35px] h-[39px] sm:-mt-2 sm:-mr-1 sm:w-[42px] sm:h-[46px] flex items-center justify-center cursor-pointer transition-transform hover:scale-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-[#7c4d12] shrink-0"
-            >
-              <img
-                src="/assets/hd/btn-close.png"
-                alt="Menu"
-                referrerPolicy="no-referrer"
-                draggable={false}
-                className="w-full h-full object-contain drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)]"
-              />
-            </button>
+            {/* Right Top Trophy Leaderboard Button + Hanging Options Tag */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  soundFX.playChipSelect();
+                  setShowLeaderboard(true);
+                }}
+                aria-label="Top 7 Leaderboard"
+                title="Top 7 Leaderboard"
+                className="w-[32px] h-[32px] sm:w-[36px] sm:h-[36px] rounded-full border border-[#7c4d12] shadow-[0_2px_6px_rgba(78,44,8,0.35),inset_0_1px_1px_rgba(255,245,200,0.6)] flex items-center justify-center cursor-pointer transition-transform hover:scale-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-[#7c4d12] shrink-0"
+                style={{
+                  background:
+                    'linear-gradient(180deg, #6b3f10 0%, #4b2a08 100%)',
+                }}
+              >
+                <Trophy className="w-[16px] h-[16px] sm:w-[18px] sm:h-[18px] text-[#ffdf6b] drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)]" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  soundFX.playChipSelect();
+                  setShowMenu(true);
+                }}
+                aria-label="Table Options"
+                className="relative -mt-1.5 -mr-0.5 w-[35px] h-[39px] sm:-mt-2 sm:-mr-1 sm:w-[42px] sm:h-[46px] flex items-center justify-center cursor-pointer transition-transform hover:scale-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-[#7c4d12] shrink-0"
+              >
+                <img
+                  src="/assets/hd/btn-close.png"
+                  alt="Menu"
+                  referrerPolicy="no-referrer"
+                  draggable={false}
+                  className="w-full h-full object-contain drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)]"
+                />
+              </button>
+            </div>
           </header>
 
           {/* ================= 3 CARD SETS ROW ================= */}
@@ -1327,6 +1348,19 @@ export default function App() {
           open={showHistory}
           history={history}
           onClose={() => setShowHistory(false)}
+        />
+
+        <LeaderboardModal
+          open={showLeaderboard}
+          apiBase={apiBase}
+          serverConnected={serverConnected}
+          currentPlayerId={playerId}
+          currentPlayerName={config.playerName}
+          currentBalance={balance}
+          currentTotalPayouts={stats.totalPayouts}
+          currentRoundsPlayed={stats.roundsPlayed}
+          coinIconUrl={activeCoinIconSrc}
+          onClose={() => setShowLeaderboard(false)}
         />
 
         <RulesModal
